@@ -557,3 +557,50 @@ void play_stop_handler(struct play *play, void *arg) {
 
 	vqueue.schedule((Molecule*)arg);
 }
+
+Session::~Session() {
+	call_hangup(_call, 0 , "Bye!");
+}
+
+struct ua *ua;
+
+std::unordered_map<struct call*, Session> Sessions;
+
+extern "C" {
+
+	void villa_event_handler(struct call *call, enum call_event ev,
+					const char *str, void *arg)
+	{
+		Session *session = (Session*)arg;
+
+		switch (ev) {
+
+		case UA_EVENT_CALL_INCOMING:
+			debug("villa: CALL_INCOMING: peer=%s --> local=%s\n",
+				call_peeruri(call), call_localuri(call));
+
+			Sessions.emplace(std::make_pair(call, Session(call)));
+			break;
+		case CALL_EVENT_CLOSED:
+			debug("villa: CALL_CLOSED: %s\n", str);
+			Sessions.erase(call);
+			break;
+		default:
+			break;
+		}
+	}
+
+
+	static void call_dtmf_handler(struct call *call, char key, void *arg)
+	{
+		Session *session = (Session*)arg;
+
+		debug("villa: received DTMF event: key = '%c'\n", key ? key : '.');
+
+		session->dtmf(key);
+	}
+
+	void villa_status(struct re_printf *pf, void *arg)
+	{
+	}
+}

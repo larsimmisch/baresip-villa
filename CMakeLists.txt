@@ -9,7 +9,7 @@
 
 cmake_minimum_required(VERSION 3.13)
 
-project(baresip-villa VERSION 1.0.0)
+project(baresip_villa VERSION 1.0.0)
 
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/cmake)
@@ -77,7 +77,7 @@ endif()
 
 
 
-find_package(re CONFIG REQUIRED HINTS ../re/cmake)
+find_package(re CONFIG REQUIRED HINTS re/cmake)
 
 list(APPEND RE_DEFINITIONS
   -DVERSION="${PROJECT_VERSION_FULL}"
@@ -91,6 +91,8 @@ add_definitions(${RE_DEFINITIONS})
 include_directories(
   include
   src
+  .
+  json/include/nlohmann
   ${RE_INCLUDE_DIRS}
   ${BARESIP_INCLUDE_DIRS}
   ${OPENSSL_INCLUDE_DIR}
@@ -120,9 +122,12 @@ if(STATIC)
   add_definitions(-DSTATIC)
 endif()
 
+link_libraries(${RE_LIBRARIES} ${BARESIP_LIBRARIES})
 
 set(SOURCES src/villa.cpp
-            src/villa_module.c)
+            src/villa_module.c
+            baresip/modules/ctrl_tcp/netstring/netstring.c
+            baresip/modules/ctrl_tcp/tcp_netstring.c)
 
 if(STATIC)
   add_library(${PROJECT_NAME} OBJECT ${SOURCES})

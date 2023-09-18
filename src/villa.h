@@ -5,7 +5,6 @@
 #include <baresip.h>
 #include <string>
 #include <regex>
-#include "core.h"
 
 #ifndef _VILLA_H_
 #define _VILLA_H_
@@ -134,9 +133,12 @@ struct VQueue {
 
 struct Session {
 
+	Session(struct call* c) : _call(c) {}
 	virtual ~Session();
-	struct call *call;
-};
 
+	virtual void dtmf(char key) {}
+
+	struct call *_call = nullptr;
+};
 
 #endif // #define _VILLA_H_
