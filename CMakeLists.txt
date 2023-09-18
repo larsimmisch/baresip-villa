@@ -92,7 +92,6 @@ include_directories(
   include
   src
   .
-  json/include/nlohmann
   ${RE_INCLUDE_DIRS}
   ${BARESIP_INCLUDE_DIRS}
   ${OPENSSL_INCLUDE_DIR}
