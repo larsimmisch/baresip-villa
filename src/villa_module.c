@@ -6,7 +6,12 @@
 #include <re.h>
 #include <baresip.h>
 
-#include "baresip/modules/ctrl_tcp/tcp_netstring.h"
+#define DEBUG_MODULE "villa"
+#define DEBUG_LEVEL 5
+
+#include <re_dbg.h>
+
+#include "json_tcp.h"
 
 extern void villa_event_handler(struct ua *ua, enum ua_event ev,
 	struct call *call, const char *prm, void *arg);
@@ -14,13 +19,13 @@ extern void villa_event_handler(struct ua *ua, enum ua_event ev,
 extern void call_event_handler(struct call *call, enum call_event ev,
 	const char *str, void *arg);
 
-extern void villa_status(struct re_printf *pf, void *arg);
+extern int villa_status(struct re_printf *pf, void *arg);
 
 enum { CTRL_PORT = 1235 };
 struct ctrl_st {
 	struct tcp_sock *ts;
 	struct tcp_conn *tc;
-	struct netstring *ns;
+	struct json_tcp *jt;
 };
 
 static struct ctrl_st *ctrl = NULL;  /* allow only one instance */
@@ -28,8 +33,6 @@ static struct ctrl_st *ctrl = NULL;  /* allow only one instance */
 static const struct cmd cmdv[] = {
 	{"villa", 0,       0, "villa status", villa_status },
 };
-
-extern struct ua *ua;
 
 static int print_handler(const char *p, size_t size, void *arg)
 {
@@ -47,16 +50,15 @@ static int encode_response(int cmd_error, struct mbuf *resp, const char *token)
 	int err;
 
 	/* Empty response. */
-	if (resp->pos == NETSTRING_HEADER_SIZE)
+	if (resp->pos == 0)
 	{
 		buf = mem_alloc(1, NULL);
 		buf[0] = '\0';
 	}
 	else
 	{
-		resp->pos = NETSTRING_HEADER_SIZE;
-		err = mbuf_strdup(resp, &buf,
-			resp->end - NETSTRING_HEADER_SIZE);
+		resp->pos = 0;
+		err = mbuf_strdup(resp, &buf, resp->end);
 		if (err)
 			return err;
 	}
@@ -82,11 +84,11 @@ static int encode_response(int cmd_error, struct mbuf *resp, const char *token)
 
 	mbuf_reset(resp);
 	mbuf_init(resp);
-	resp->pos = NETSTRING_HEADER_SIZE;
+	resp->pos = 0;
 
 	err = json_encode_odict(&pf, od);
 	if (err)
-		warning("ctrl_tcp: failed to encode response JSON (%m)\n",
+		DEBUG_WARNING("villa: failed to encode response JSON (%m)\n",
 			err);
 
  out:
@@ -96,36 +98,30 @@ static int encode_response(int cmd_error, struct mbuf *resp, const char *token)
 	return err;
 }
 
-static bool command_handler(struct mbuf *mb, void *arg)
+static bool command_handler(struct odict *od, int *errp, void *arg)
 {
 	struct ctrl_st *st = arg;
 	struct mbuf *resp = mbuf_alloc(2048);
 	struct re_printf pf = {print_handler, resp};
-	struct odict *od = NULL;
 	const char *cmd, *prm, *tok;
 	char buf[1024];
 	int err;
-
-	err = json_decode_odict(&od, 32, (const char*)mb->buf, mb->end, 16);
-	if (err) {
-		warning("villa: failed to decode JSON (%m)\n", err);
-		goto out;
-	}
 
 	cmd = odict_string(od, "command");
 	prm = odict_string(od, "params");
 	tok = odict_string(od, "token");
 	if (!cmd) {
-		warning("villa: missing json entries\n");
+		DEBUG_PRINTF("villa: missing json entries\n");
+		*errp = EINVAL;
 		goto out;
 	}
 
-	debug("villa: handle_command:  cmd='%s', params:'%s', token='%s'\n",
+	DEBUG_PRINTF("villa: handle_command:  cmd='%s', params:'%s', token='%s'\n",
 	      cmd, prm, tok);
 
 	re_snprintf(buf, sizeof(buf), "%s%s%s", cmd, prm ? " " : "", prm);
 
-	resp->pos = NETSTRING_HEADER_SIZE;
+	resp->pos = 0;
 
 	/* Relay message to long commands */
 	err = cmd_process_long(baresip_commands(),
@@ -133,19 +129,19 @@ static bool command_handler(struct mbuf *mb, void *arg)
 			       str_len(buf),
 			       &pf, NULL);
 	if (err) {
-		warning("villa: error processing command (%m)\n", err);
+		DEBUG_WARNING("villa: error processing command (%m)\n", err);
 	}
 
 	err = encode_response(err, resp, tok ? tok : NULL);
 	if (err) {
-		warning("villa: failed to encode response (%m)\n", err);
+		DEBUG_WARNING("villa: failed to encode response (%m)\n", err);
 		goto out;
 	}
 
-	resp->pos = NETSTRING_HEADER_SIZE;
+	resp->pos = 0;
 	err = tcp_send(st->tc, resp);
 	if (err) {
-		warning("villa: failed to send the response (%m)\n", err);
+		DEBUG_WARNING("villa: failed to send the response (%m)\n", err);
 	}
 
  out:
@@ -162,7 +158,10 @@ static void tcp_close_handler(int err, void *arg)
 
 	(void)err;
 
-	st->tc = mem_deref(st->tc);
+	// TODO: send connection closed to module
+
+	if (st->tc)
+		st->tc = mem_deref(st->tc);
 }
 
 
@@ -174,17 +173,17 @@ static void tcp_conn_handler(const struct sa *peer, void *arg)
 
 	/* only one connection allowed */
 	st->tc = mem_deref(st->tc);
-	st->ns = mem_deref(st->ns);
+	st->jt = mem_deref(st->jt);
 
 	(void)tcp_accept(&st->tc, st->ts, NULL, NULL, tcp_close_handler, st);
-	(void)netstring_insert(&st->ns, st->tc, 0, command_handler, st);
+	(void)json_tcp_insert(&st->jt, st->tc, 0, command_handler, st);
 }
 
 
 /*
  * Relay UA events
  */
-void ua_event_handler(struct ua *ua, enum ua_event ev,
+static void ua_event_handler(struct ua *ua, enum ua_event ev,
 			     struct call *call, const char *prm, void *arg)
 {
 	struct ctrl_st *st = arg;
@@ -193,7 +192,7 @@ void ua_event_handler(struct ua *ua, enum ua_event ev,
 	struct odict *od = NULL;
 	int err;
 
-	buf->pos = NETSTRING_HEADER_SIZE;
+	buf->pos = 0;
 
 	err = odict_alloc(&od, 8);
 	if (err)
@@ -202,21 +201,21 @@ void ua_event_handler(struct ua *ua, enum ua_event ev,
 	err = odict_entry_add(od, "event", ODICT_BOOL, true);
 	err |= event_encode_dict(od, ua, ev, call, prm);
 	if (err) {
-		warning("villa: failed to encode event (%m)\n", err);
+		DEBUG_WARNING("villa: failed to encode event (%m)\n", err);
 		goto out;
 	}
 
 	err = json_encode_odict(&pf, od);
 	if (err) {
-		warning("villa: failed to encode event JSON (%m)\n", err);
+		DEBUG_WARNING("villa: failed to encode event JSON (%m)\n", err);
 		goto out;
 	}
 
 	if (st->tc) {
-		buf->pos = NETSTRING_HEADER_SIZE;
+		buf->pos = 0;
 		err = tcp_send(st->tc, buf);
 		if (err) {
-			warning("villa: failed to send event (%m)\n", err);
+			DEBUG_WARNING("villa: failed to send event (%m)\n", err);
 		}
 	}
 
@@ -238,7 +237,7 @@ static void message_handler(struct ua *ua, const struct pl *peer,
 	struct odict *od = NULL;
 	int err;
 
-	buf->pos = NETSTRING_HEADER_SIZE;
+	buf->pos = 0;
 
 	err = odict_alloc(&od, 8);
 	if (err)
@@ -247,23 +246,22 @@ static void message_handler(struct ua *ua, const struct pl *peer,
 	err  = odict_entry_add(od, "message", ODICT_BOOL, true);
 	err |= message_encode_dict(od, ua_account(ua), peer, ctype, body);
 	if (err) {
-		warning("villa: failed to encode message (%m)\n", err);
+		DEBUG_WARNING("villa: failed to encode message (%m)\n", err);
 		goto out;
 	}
 
 	err = json_encode_odict(&pf, od);
 	if (err) {
-		warning("villa: failed to encode event JSON (%m)\n", err);
+		DEBUG_WARNING("villa: failed to encode event JSON (%m)\n", err);
 		goto out;
 	}
 
-	buf->pos = NETSTRING_HEADER_SIZE;
 	if (!st->tc)
 		goto out;
 
 	err = tcp_send(st->tc, buf);
 	if (err) {
-		warning("villa: failed to send the SIP message (%m)\n",
+		DEBUG_WARNING("villa: failed to send the SIP message (%m)\n",
 			err);
 	}
 
@@ -278,7 +276,7 @@ static void ctrl_destructor(void *arg)
 
 	mem_deref(st->tc);
 	mem_deref(st->ts);
-	mem_deref(st->ns);
+	mem_deref(st->jt);
 }
 
 static int ctrl_alloc(struct ctrl_st **stp, const struct sa *laddr)
@@ -295,12 +293,12 @@ static int ctrl_alloc(struct ctrl_st **stp, const struct sa *laddr)
 
 	err = tcp_listen(&st->ts, laddr, tcp_conn_handler, st);
 	if (err) {
-		warning("villa: failed to listen on TCP %J (%m)\n",
+		DEBUG_WARNING("villa: failed to listen on TCP %J (%m)\n",
 			laddr, err);
 		goto out;
 	}
 
-	debug("ctrl_tcp: TCP socket listening on %J\n", laddr);
+	DEBUG_PRINTF("ctrl_tcp: TCP socket listening on %J\n", laddr);
 
  out:
 	if (err)
@@ -335,7 +333,7 @@ static int module_init(void)
 	if (err)
 		return err;
 
-	debug("villa: module loaded\n");
+	DEBUG_PRINTF("villa: module loaded\n");
 
 	return 0;
 }
@@ -343,7 +341,7 @@ static int module_init(void)
 
 static int module_close(void)
 {
-	debug("villa: module closing..\n");
+	DEBUG_PRINTF("villa: module closing..\n");
 
 	uag_event_unregister(ua_event_handler);
 	cmd_unregister(baresip_commands(), cmdv);

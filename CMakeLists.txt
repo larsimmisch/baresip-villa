@@ -80,13 +80,13 @@ endif()
 find_package(re CONFIG REQUIRED HINTS re/cmake)
 
 list(APPEND RE_DEFINITIONS
-  -DVERSION="${PROJECT_VERSION_FULL}"
-  -DVER_MAJOR=${PROJECT_VERSION_MAJOR}
-  -DVER_MINOR=${PROJECT_VERSION_MINOR}
-  -DVER_PATCH=${PROJECT_VERSION_PATCH}
+  VERSION="${PROJECT_VERSION_FULL}"
+  VER_MAJOR=${PROJECT_VERSION_MAJOR}
+  VER_MINOR=${PROJECT_VERSION_MINOR}
+  VER_PATCH=${PROJECT_VERSION_PATCH}
 )
 
-add_definitions(${RE_DEFINITIONS})
+add_compile_definitions(${RE_DEFINITIONS})
 
 include_directories(
   include
@@ -125,8 +125,7 @@ link_libraries(${RE_LIBRARIES} ${BARESIP_LIBRARIES})
 
 set(SOURCES src/villa.cpp
             src/villa_module.c
-            baresip/modules/ctrl_tcp/netstring/netstring.c
-            baresip/modules/ctrl_tcp/tcp_netstring.c)
+            src/json_tcp.c)
 
 if(STATIC)
   add_library(${PROJECT_NAME} OBJECT ${SOURCES})

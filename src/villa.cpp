@@ -4,6 +4,14 @@
  * Copyright (C) 2023 Lars Immisch
  */
 
+#define DEBUG_MODULE "villa"
+#define DEBUG_LEVEL 5
+
+#include <stddef.h>
+#include <re.h>
+#include <baresip.h>
+#include <re_dbg.h>
+
 #include "villa.h"
 #include "baresip/modules/aufile/aufile.h"
 
@@ -269,7 +277,7 @@ int VQueue::schedule(Molecule* stopped) {
 
 			const Play& play = std::get<Play>(a);
 
-			info("playing %s\n", play.filename().c_str());
+			DEBUG_INFO("playing %s\n", play.filename().c_str());
 
 			// mute
 			// audio_mute(audio, true);
@@ -306,7 +314,7 @@ int VQueue::schedule(Molecule* stopped) {
 				filename += ".wav";
 			}
 
-			info("DTMF playing %s\n", filename.c_str());
+			DEBUG_INFO("DTMF playing %s\n", filename.c_str());
 
 			// mute
 			// audio_mute(audio, true);
@@ -346,7 +354,7 @@ int VQueue::schedule(Molecule* stopped) {
 			sprm.ptime = PTIME;
 			sprm.fmt = AUFMT_S16LE;
 
-			info("recording %s\n", record.filename().c_str());
+			DEBUG_INFO("recording %s\n", record.filename().c_str());
 
 			const struct ausrc *ausrc = ausrc_find(baresip_ausrcl(), "aufile");
 
@@ -459,7 +467,7 @@ int VQueue::enqueue(const char* mdesc, void* arg) {
 		}
 	}
 
-	info("adding Molecule priority: %d, mode: %s\n", m.priority, mode_string(m.mode).c_str());
+	DEBUG_INFO("adding Molecule priority: %d, mode: %s\n", m.priority, mode_string(m.mode).c_str());
 
 	while (token != tokens.end()) {
 
@@ -543,7 +551,7 @@ int VQueue::enqueue(const char* mdesc, void* arg) {
 
 void play_stop_handler(struct play *play, void *arg) {
 
-	info("play file previous\n");
+	DEBUG_INFO("play file previous\n");
 	size_t now = tmr_jiffies();
 
 	/* Stop the current player or recorder, if any */
@@ -562,8 +570,6 @@ Session::~Session() {
 	call_hangup(_call, 0 , "Bye!");
 }
 
-struct ua *ua;
-
 std::unordered_map<struct call*, Session> Sessions;
 
 extern "C" {
@@ -575,14 +581,14 @@ extern "C" {
 
 		switch (ev) {
 
-		case UA_EVENT_CALL_INCOMING:
-			debug("villa: CALL_INCOMING: peer=%s --> local=%s\n",
+		case CALL_EVENT_INCOMING:
+			DEBUG_PRINTF("villa: CALL_INCOMING: peer=%s --> local=%s\n",
 				call_peeruri(call), call_localuri(call));
 
 			Sessions.emplace(std::make_pair(call, Session(call)));
 			break;
 		case CALL_EVENT_CLOSED:
-			debug("villa: CALL_CLOSED: %s\n", str);
+			DEBUG_PRINTF("villa: CALL_CLOSED: %s\n", str);
 			Sessions.erase(call);
 			break;
 		default:
@@ -595,12 +601,13 @@ extern "C" {
 	{
 		Session *session = (Session*)arg;
 
-		debug("villa: received DTMF event: key = '%c'\n", key ? key : '.');
+		DEBUG_PRINTF("villa: received DTMF event: key = '%c'\n", key ? key : '.');
 
 		session->dtmf(key);
 	}
 
-	void villa_status(struct re_printf *pf, void *arg)
+	int villa_status(struct re_printf *pf, void *arg)
 	{
+		return 0;
 	}
 }
