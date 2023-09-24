@@ -5,7 +5,7 @@
  */
 
 #define DEBUG_MODULE "villa"
-#define DEBUG_LEVEL 5
+#define DEBUG_LEVEL 7
 
 #include <stddef.h>
 #include <re.h>
@@ -13,6 +13,7 @@
 #include <re_dbg.h>
 
 #include "villa.h"
+#include "json_tcp.h"
 #include "baresip/modules/aufile/aufile.h"
 
 void play_stop_handler(struct play *play, void *arg);
@@ -570,32 +571,181 @@ Session::~Session() {
 	call_hangup(_call, 0 , "Bye!");
 }
 
-std::unordered_map<struct call*, Session> Sessions;
+std::unordered_map<std::string, Session> Sessions;
+std::vector<ua*> UserAgents;
+std::unordered_map<std::string,call*> PendingCalls;
+
+odict *create_response(const char* command, const char* token, int result)
+{
+	odict *od = nullptr;
+	odict_alloc(&od, DICT_BSIZE);
+
+	odict_entry_add(od, "type", ODICT_STRING, "response");
+	odict_entry_add(od, "class", ODICT_STRING, "villa");
+	odict_entry_add(od, "command", ODICT_STRING, command);
+	if (token) {
+		odict_entry_add(od, "token", ODICT_STRING, token);
+	}
+	odict_entry_add(od, "result", ODICT_INT, result);
+
+	return od;
+}
 
 extern "C" {
 
-	void villa_event_handler(struct call *call, enum call_event ev,
-					const char *str, void *arg)
+	void villa_event_handler(struct ua *ua, enum ua_event ev,
+		struct call *call, const char *prm, void *arg)
 	{
-		Session *session = (Session*)arg;
-
 		switch (ev) {
 
-		case CALL_EVENT_INCOMING:
-			DEBUG_PRINTF("villa: CALL_INCOMING: peer=%s --> local=%s\n",
-				call_peeruri(call), call_localuri(call));
-
-			Sessions.emplace(std::make_pair(call, Session(call)));
+		case UA_EVENT_CALL_INCOMING:
+		{
+			std::string cid(call_id(call));
+			DEBUG_PRINTF("villa: CALL_INCOMING(%s): peer=%s --> local=%s\n",
+				cid.c_str(), call_peeruri(call), call_localuri(call));
+			PendingCalls.insert(std::make_pair(cid, call));
+		}
 			break;
-		case CALL_EVENT_CLOSED:
-			DEBUG_PRINTF("villa: CALL_CLOSED: %s\n", str);
-			Sessions.erase(call);
+		case UA_EVENT_CALL_CLOSED:
+		{
+			std::string cid(call_id(call));
+			auto cit = PendingCalls.find(cid);
+			if (cit != PendingCalls.end()) {
+				DEBUG_PRINTF("villa: CALL_CLOSED before accepted: %s\n", prm);
+				PendingCalls.erase(cit);
+			}
+
+			auto sit = Sessions.find(cid);
+			if (sit != Sessions.end()) {
+				sit->second.hangup();
+			}
+			Sessions.erase(sit);
+		}
 			break;
 		default:
 			break;
 		}
 	}
 
+	struct odict *villa_command_handler(const char* command,
+		struct odict *parms, const char* token)
+	{
+		if (strcmp(command, "listen") == 0) {
+
+			struct le *le = parms->lst.head;
+			if (!le) {
+				DEBUG_PRINTF("villa: command listen without parameter");
+				return nullptr;
+			}
+
+			const odict_entry *e = (const odict_entry*)le->data;
+			if (odict_entry_type(e) != ODICT_STRING) {
+				DEBUG_PRINTF("villa: command listen parameter invalid type");
+				return nullptr;
+			}
+
+			const char* addr = odict_entry_str(e);
+
+			struct ua *agent;
+
+			int err = ua_alloc(&agent, addr);
+			if (!err) {
+				UserAgents.push_back(agent);
+			}
+
+			return create_response("listen", token, err);
+		}
+		else if (strcmp(command, "answer") == 0) {
+
+			struct le *le = parms->lst.head;
+			if (!le) {
+				DEBUG_PRINTF("villa: command accept without parameter");
+				return nullptr;
+			}
+
+			const odict_entry *e = (const odict_entry*)le->data;
+			if (odict_entry_type(e) != ODICT_STRING) {
+				DEBUG_PRINTF("villa: command accept parameter invalid type");
+				return nullptr;
+			}
+
+			std::string cid(odict_entry_str(e));
+
+			auto cit = PendingCalls.find(cid);
+			if (cit == PendingCalls.end()) {
+				return create_response("answer", token, EINVAL);
+			}
+
+			int err = call_answer(cit->second, 200, VIDMODE_OFF);
+
+			if (!err) {
+				// Create the session
+				Sessions.insert(std::make_pair(cid,Session(cit->second)));
+			}
+
+			PendingCalls.erase(cit);
+
+			return create_response("answer", token, err);
+		}
+		else if (strcmp(command, "hangup") == 0) {
+
+			struct le *le = parms->lst.head;
+			if (!le) {
+				DEBUG_PRINTF("villa: command hangup without parameter");
+				return nullptr;
+			}
+
+			const odict_entry *e = (const odict_entry*)le->data;
+			if (odict_entry_type(e) != ODICT_STRING) {
+				DEBUG_PRINTF("villa: command hangup parameter invalid type");
+				return nullptr;
+			}
+
+			const char* cid = odict_entry_str(e);
+
+			int16_t scode = 200;
+			const char* reason = "Bye";
+
+			le = le->next;
+			if (le) {
+				const odict_entry *e = (const odict_entry*)le->data;
+				if (odict_entry_type(e) != ODICT_INT) {
+					DEBUG_PRINTF("villa: command hangup parameter 2 invalid type");
+					return nullptr;
+				}
+				scode = odict_entry_int(e);
+
+				le = le->next;
+				if (le) {
+					e = (const odict_entry*)le->data;
+					if (odict_entry_type(e) != ODICT_STRING) {
+						DEBUG_PRINTF("villa: command hangup parameter 3 invalid type");
+						return nullptr;
+					}
+					reason = odict_entry_str(e);
+				}
+			}
+
+			auto sit = Sessions.find(cid);
+			if (sit != Sessions.end()) {
+				sit->second.hangup();
+
+				call_hangup(sit->second._call, scode, reason);
+
+				Sessions.erase(sit);
+			}
+			else {
+
+				auto cit = PendingCalls.find(cid);
+				if (cit != PendingCalls.end()) {
+				}
+
+				int err = call_answer(cit->second, 200, VIDMODE_OFF);
+			}
+
+			return create_response("hangup", token, 0);
+		}
+	}
 
 	static void call_dtmf_handler(struct call *call, char key, void *arg)
 	{

@@ -10,15 +10,10 @@
 #include <re.h>
 
 #define DEBUG_MODULE "json_tcp"
-#define DEBUG_LEVEL 5
+#define DEBUG_LEVEL 7
 #include <re_dbg.h>
 
 #include "json_tcp.h"
-
-enum {
-	DICT_BSIZE = 32,
-	MAX_LEVELS =  8,
-};
 
 struct json_tcp {
 	struct tcp_conn *tc;
@@ -34,19 +29,17 @@ struct json_tcp {
 static bool json_tcp_recv_handler(int *errp, struct mbuf *mbx, bool *estab,
 			      void *arg)
 {
-	struct json_tcp *json_tcp = arg;
+	struct json_tcp *jt = arg;
 	(void)estab;
 
-	if (!json_tcp->rcvbuf)
-		json_tcp->rcvbuf = mbuf_alloc(mbx->size);
+	if (!jt->rcvbuf)
+		jt->rcvbuf = mbuf_alloc(mbx->size);
 
-	struct mbuf *rcvbuf = json_tcp->rcvbuf;
+	struct mbuf *rcvbuf = jt->rcvbuf;
 
 	int err = mbuf_write_mem(rcvbuf, mbuf_buf(mbx), mbuf_get_left(mbx));
 	if (err) {
 		DEBUG_PRINTF("villa: failed to read into receive buffer (%m). Closing connection\n", err);
-		mem_deref(json_tcp->tc);
-		json_tcp->tc = NULL;
 		*errp = ENOMEM;
 		return true;
 	}
@@ -55,11 +48,11 @@ static bool json_tcp_recv_handler(int *errp, struct mbuf *mbx, bool *estab,
 	for (size_t i = 0; i < mbuf_end(rcvbuf); ++i) {
 
 		bool rn_delimited = (mbuf_end(rcvbuf) - i) >=2 &&
-			strcmp((const char*)(rcvbuf->buf + i), "\r\n") == 0;
+			strncmp((const char*)(rcvbuf->buf + i), "\r\n", 2) == 0;
 
 		if (rn_delimited) {
 
-			++json_tcp->n_rx;
+			++jt->n_rx;
 
 			struct odict *od;
 			const char* str = (const char*)(rcvbuf->buf);
@@ -77,8 +70,11 @@ static bool json_tcp_recv_handler(int *errp, struct mbuf *mbx, bool *estab,
 				return true;
 			}
 
-			json_tcp->frameh(od, errp, json_tcp->arg);
-			mbuf_rewind(json_tcp->rcvbuf);
+			DEBUG_INFO("received message: %s", str);
+
+			jt->frameh(od, errp, jt->arg);
+			mbuf_rewind(jt->rcvbuf);
+			mem_deref(od);
 		}
 	}
 
@@ -90,12 +86,11 @@ static bool json_tcp_recv_handler(int *errp, struct mbuf *mbx, bool *estab,
 
 static void destructor(void *arg)
 {
-	struct json_tcp *json_tcp = arg;
+	struct json_tcp *jt = arg;
 
-	mem_deref(json_tcp->th);
-	mem_deref(json_tcp->tc);
-	if (json_tcp->rcvbuf)
-		mem_deref(json_tcp->rcvbuf);
+	mem_deref(jt->th);
+	mem_deref(jt->tc);
+	mem_deref(jt->rcvbuf);
 }
 
 static int json_tcp_print_h(const char *p, size_t size, void *arg)
@@ -105,7 +100,7 @@ static int json_tcp_print_h(const char *p, size_t size, void *arg)
 	return mbuf_write_mem(mb, (const uint8_t*)p, size);
 }
 
-int json_tcp_send(struct json_tcp *json_tcp, const struct odict *od)
+int json_tcp_send(struct json_tcp *jt, struct odict *od)
 {
 	struct mbuf *mb = mbuf_alloc(1024);
 
@@ -113,14 +108,17 @@ int json_tcp_send(struct json_tcp *json_tcp, const struct odict *od)
 
 	int err = json_encode_odict(&pf, od);
 	if (err) {
-		return err;
+		goto out;
 	}
 
 	mbuf_write_str(mb, "\r\n");
 
 	mbuf_set_pos(mb, 0);
-	err = tcp_send(json_tcp->tc, mb);
+	err = tcp_send(jt->tc, mb);
+
+out:
 	mem_deref(mb);
+	mem_deref(od);
 
 	return err;
 }
@@ -140,39 +138,38 @@ static struct odict *json_tcp_hello(void)
 	return od;
 }
 
-int json_tcp_insert(struct json_tcp **json_tcpp, struct tcp_conn *tc,
+int json_tcp_insert(struct json_tcp **jtp, struct tcp_conn *tc,
 		int layer, json_tcp_frame_h *frameh, void *arg)
 {
-	struct json_tcp *json_tcp;
+	struct json_tcp *jt;
 	int err;
 
-	if (!json_tcpp || !tc || !frameh)
+	if (!jtp || !tc || !frameh)
 		return EINVAL;
 
-	json_tcp = mem_zalloc(sizeof(*json_tcp), destructor);
-	if (!json_tcp)
+	jt = mem_zalloc(sizeof(*jt), destructor);
+	if (!jt)
 		return ENOMEM;
 
-	json_tcp->tc = mem_ref(tc);
-	err = tcp_register_helper(&json_tcp->th, tc, layer, NULL,
-				  NULL, json_tcp_recv_handler, json_tcp);
+	jt->tc = mem_ref(tc);
+	err = tcp_register_helper(&jt->th, tc, layer, NULL,
+				  NULL, json_tcp_recv_handler, jt);
 	if (err)
 		goto out;
 
-	json_tcp->frameh = frameh;
-	json_tcp->arg = arg;
-	json_tcp->rcvbuf = NULL;
-
- out:
-	if (err)
-		mem_deref(json_tcp);
-	else
-		*json_tcpp = json_tcp;
+	jt->frameh = frameh;
+	jt->arg = arg;
+	jt->rcvbuf = NULL;
 
 	/* send hello with protocol version */
 	struct odict* hello = json_tcp_hello();
-	err = json_tcp_send(json_tcp, hello);
-	mem_deref(hello);
+	err = json_tcp_send(jt, hello);
+
+ out:
+	if (err)
+		mem_deref(jt);
+	else
+		*jtp = jt;
 
 	return err;
 }

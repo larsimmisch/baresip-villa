@@ -137,6 +137,7 @@ struct Session {
 	virtual ~Session();
 
 	virtual void dtmf(char key) {}
+	virtual void hangup() {}
 
 	struct call *_call = nullptr;
 };

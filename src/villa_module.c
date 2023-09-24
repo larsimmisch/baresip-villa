@@ -7,7 +7,7 @@
 #include <baresip.h>
 
 #define DEBUG_MODULE "villa"
-#define DEBUG_LEVEL 5
+#define DEBUG_LEVEL 7
 
 #include <re_dbg.h>
 
@@ -18,6 +18,9 @@ extern void villa_event_handler(struct ua *ua, enum ua_event ev,
 
 extern void call_event_handler(struct call *call, enum call_event ev,
 	const char *str, void *arg);
+
+extern struct odict *villa_command_handler(const char* command,
+	const struct odict *parms, const char* token);
 
 extern int villa_status(struct re_printf *pf, void *arg);
 
@@ -98,55 +101,26 @@ static int encode_response(int cmd_error, struct mbuf *resp, const char *token)
 	return err;
 }
 
-static bool command_handler(struct odict *od, int *errp, void *arg)
+static bool command_handler(const struct odict *od, int *errp, void *arg)
 {
 	struct ctrl_st *st = arg;
-	struct mbuf *resp = mbuf_alloc(2048);
-	struct re_printf pf = {print_handler, resp};
-	const char *cmd, *prm, *tok;
-	char buf[1024];
-	int err;
 
-	cmd = odict_string(od, "command");
-	prm = odict_string(od, "params");
-	tok = odict_string(od, "token");
+	const char *cmd = odict_string(od, "command");
+	struct odict *prm = odict_get_array(od, "params");
+	const char *tok = odict_string(od, "token");
 	if (!cmd) {
-		DEBUG_PRINTF("villa: missing json entries\n");
+		DEBUG_PRINTF("villa: command handler: missing command\n");
 		*errp = EINVAL;
-		goto out;
+		return true;
 	}
 
-	DEBUG_PRINTF("villa: handle_command:  cmd='%s', params:'%s', token='%s'\n",
-	      cmd, prm, tok);
+	struct odict *resp = villa_command_handler(cmd, prm, tok);
 
-	re_snprintf(buf, sizeof(buf), "%s%s%s", cmd, prm ? " " : "", prm);
-
-	resp->pos = 0;
-
-	/* Relay message to long commands */
-	err = cmd_process_long(baresip_commands(),
-			       buf,
-			       str_len(buf),
-			       &pf, NULL);
-	if (err) {
-		DEBUG_WARNING("villa: error processing command (%m)\n", err);
-	}
-
-	err = encode_response(err, resp, tok ? tok : NULL);
-	if (err) {
-		DEBUG_WARNING("villa: failed to encode response (%m)\n", err);
-		goto out;
-	}
-
-	resp->pos = 0;
-	err = tcp_send(st->tc, resp);
+	int err = json_tcp_send(st->jt, resp);
 	if (err) {
 		DEBUG_WARNING("villa: failed to send the response (%m)\n", err);
+		*errp = err;
 	}
-
- out:
-	mem_deref(resp);
-	mem_deref(od);
 
 	return true;  /* always handled */
 }
@@ -187,43 +161,22 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 			     struct call *call, const char *prm, void *arg)
 {
 	struct ctrl_st *st = arg;
-	struct mbuf *buf = mbuf_alloc(1024);
-	struct re_printf pf = {print_handler, buf};
 	struct odict *od = NULL;
-	int err;
 
-	buf->pos = 0;
-
-	err = odict_alloc(&od, 8);
+	int err = odict_alloc(&od, DICT_BSIZE);
 	if (err)
 		return;
+
+	villa_event_handler(ua, ev, call, prm, arg);
 
 	err = odict_entry_add(od, "event", ODICT_BOOL, true);
 	err |= event_encode_dict(od, ua, ev, call, prm);
 	if (err) {
 		DEBUG_WARNING("villa: failed to encode event (%m)\n", err);
-		goto out;
+		return;
 	}
 
-	err = json_encode_odict(&pf, od);
-	if (err) {
-		DEBUG_WARNING("villa: failed to encode event JSON (%m)\n", err);
-		goto out;
-	}
-
-	if (st->tc) {
-		buf->pos = 0;
-		err = tcp_send(st->tc, buf);
-		if (err) {
-			DEBUG_WARNING("villa: failed to send event (%m)\n", err);
-		}
-	}
-
- out:
-	mem_deref(buf);
-	mem_deref(od);
-
-	villa_event_handler(ua, ev, call, prm, arg);
+	json_tcp_send(st->jt, od);
 }
 
 
