@@ -5,6 +5,7 @@
 #include <baresip.h>
 #include <string>
 #include <regex>
+#include <chrono>
 
 #ifndef _VILLA_H_
 #define _VILLA_H_
@@ -137,8 +138,12 @@ struct Session {
 	Session(const Session& other) = delete;
 	Session(Session&& other) {
 		_id = std::move(other._id);
+		_dtmf = std::move(other._dtmf);
+		_dtmf_start = std::move(other._dtmf_start);
+
 		_call = other._call;
 		other._call = nullptr;
+
 		_jt = other._jt;
 		other._jt = nullptr;
 	}
@@ -149,6 +154,8 @@ struct Session {
 	virtual void hangup(int16_t scode = 200, const char* reason = "BYE");
 
 	std::string _id;
+	std::string _dtmf;
+	std::chrono::time_point<std::chrono::system_clock> _dtmf_start;
 	struct call *_call = nullptr;
 	struct json_tcp *_jt;
 };

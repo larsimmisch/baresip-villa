@@ -14,7 +14,6 @@
 
 #include "villa.h"
 #include "json_tcp.h"
-#include "villa_module.h"
 #include "baresip/modules/aufile/aufile.h"
 
 void play_stop_handler(struct play *play, void *arg);
@@ -574,13 +573,29 @@ Session::Session(struct call *call, struct json_tcp *jt) : _call(call), _jt(jt) 
 
 void Session::dtmf(char key) {
 
-	std::string skey(key, 1);
 	odict *od;
 	odict_alloc(&od, DICT_BSIZE);
 
 	odict_entry_add(od, "event", ODICT_BOOL, true);
-	odict_entry_add(od, "type", ODICT_STRING, "dtmf");
-	odict_entry_add(od, "key", ODICT_STRING, skey.c_str());
+
+	if (key == '\x04') { // end-of-transmission
+		auto now = std::chrono::system_clock::now();
+
+		auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now - _dtmf_start);
+		odict_entry_add(od, "type", ODICT_STRING, "dtmf_end");
+		odict_entry_add(od, "key", ODICT_STRING, _dtmf.c_str());
+		odict_entry_add(od, "duration", ODICT_INT, duration);
+		_dtmf.erase();
+
+	}
+	else {
+		char k[2] = { key, 0 };
+		_dtmf = k;
+		odict_entry_add(od, "type", ODICT_STRING, "dtmf_begin");
+		odict_entry_add(od, "key", ODICT_STRING, _dtmf.c_str());
+
+		_dtmf_start = std::chrono::system_clock::now();
+	}
 
 	json_tcp_send(_jt, od);
 }
@@ -672,6 +687,8 @@ extern "C" {
 		Session *session = (Session*)arg;
 
 		DEBUG_PRINTF("villa: received DTMF event: key = '%c'\n", key ? key : '.');
+
+		session->dtmf(key);
 	}
 
 	void villa_event_handler(struct ua *ua, enum ua_event ev,
@@ -747,7 +764,7 @@ extern "C" {
 
 			if (!err) {
 				// Create the session
-				auto [it, _] = Sessions.insert(std::make_pair(cid, std::move(Session(call, jt))));
+				auto [it, _] = Sessions.insert(std::make_pair(cid, Session(call, jt)));
 
 				Session* session = &it->second;
 				call_set_handlers(call, villa_call_event_handler,
