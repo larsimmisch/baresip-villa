@@ -133,13 +133,24 @@ struct VQueue {
 
 struct Session {
 
-	Session(struct call* c) : _call(c) {}
+	Session(struct call* call, struct json_tcp *_jt);
+	Session(const Session& other) = delete;
+	Session(Session&& other) {
+		_id = std::move(other._id);
+		_call = other._call;
+		other._call = nullptr;
+		_jt = other._jt;
+		other._jt = nullptr;
+	}
+
 	virtual ~Session();
 
-	virtual void dtmf(char key) {}
-	virtual void hangup() {}
+	virtual void dtmf(char key);
+	virtual void hangup(int16_t scode = 200, const char* reason = "BYE");
 
+	std::string _id;
 	struct call *_call = nullptr;
+	struct json_tcp *_jt;
 };
 
 #endif // #define _VILLA_H_

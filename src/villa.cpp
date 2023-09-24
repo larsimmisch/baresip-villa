@@ -14,6 +14,7 @@
 
 #include "villa.h"
 #include "json_tcp.h"
+#include "villa_module.h"
 #include "baresip/modules/aufile/aufile.h"
 
 void play_stop_handler(struct play *play, void *arg);
@@ -567,8 +568,42 @@ void play_stop_handler(struct play *play, void *arg) {
 	vqueue.schedule((Molecule*)arg);
 }
 
+Session::Session(struct call *call, struct json_tcp *jt) : _call(call), _jt(jt) {
+	_id = call_id(call);
+}
+
+void Session::dtmf(char key) {
+
+	std::string skey(key, 1);
+	odict *od;
+	odict_alloc(&od, DICT_BSIZE);
+
+	odict_entry_add(od, "event", ODICT_BOOL, true);
+	odict_entry_add(od, "type", ODICT_STRING, "dtmf");
+	odict_entry_add(od, "key", ODICT_STRING, skey.c_str());
+
+	json_tcp_send(_jt, od);
+}
+
+void Session::hangup(int16_t scode, const char* reason) {
+	if (_call) {
+		call_hangup(_call, scode , reason);
+		_call = nullptr;
+
+		odict *od;
+		odict_alloc(&od, DICT_BSIZE);
+
+		odict_entry_add(od, "event", ODICT_BOOL, true);
+		odict_entry_add(od, "type", ODICT_STRING, "call_closed");
+		odict_entry_add(od, "status_code", ODICT_INT, scode);
+		odict_entry_add(od, "reason", ODICT_STRING, reason);
+
+		json_tcp_send(_jt, od);
+	}
+}
+
 Session::~Session() {
-	call_hangup(_call, 0 , "Bye!");
+	hangup();
 }
 
 std::unordered_map<std::string, Session> Sessions;
@@ -592,6 +627,52 @@ odict *create_response(const char* command, const char* token, int result)
 }
 
 extern "C" {
+	void villa_call_event_handler(struct call *call, enum call_event ev,
+			    const char *str, void *arg)
+	{
+		Session *session = (Session*)arg;
+
+		switch (ev) {
+			case CALL_EVENT_CLOSED:
+			{
+				std::string cid(call_id(call));
+
+				auto sit = Sessions.find(cid);
+				if (sit != Sessions.end()) {
+
+					DEBUG_INFO("villa: %s CALL_CLOSED\n", session->_id.c_str());
+
+					session->hangup(200, str);
+					Sessions.erase(sit);
+				}
+				else {
+					auto cit = PendingCalls.find(cid);
+					if (cit != PendingCalls.end()) {
+						DEBUG_PRINTF("villa: %s CALL_CLOSED before accepted: %s\n",
+							session->_id.c_str(), str);
+						PendingCalls.erase(cit);
+						return;
+					}
+					else {
+						DEBUG_INFO("villa: %s CALL_CLOSED, but no session found\n",
+							session->_id.c_str());
+					}
+				}
+			}
+			break;
+		default:
+			break;
+		}
+
+		DEBUG_PRINTF("villa: received call event: '%d'\n", ev);
+	}
+
+	void villa_dtmf_handler(struct call *call, char key, void *arg)
+	{
+		Session *session = (Session*)arg;
+
+		DEBUG_PRINTF("villa: received DTMF event: key = '%c'\n", key ? key : '.');
+	}
 
 	void villa_event_handler(struct ua *ua, enum ua_event ev,
 		struct call *call, const char *prm, void *arg)
@@ -606,29 +687,13 @@ extern "C" {
 			PendingCalls.insert(std::make_pair(cid, call));
 		}
 			break;
-		case UA_EVENT_CALL_CLOSED:
-		{
-			std::string cid(call_id(call));
-			auto cit = PendingCalls.find(cid);
-			if (cit != PendingCalls.end()) {
-				DEBUG_PRINTF("villa: CALL_CLOSED before accepted: %s\n", prm);
-				PendingCalls.erase(cit);
-			}
-
-			auto sit = Sessions.find(cid);
-			if (sit != Sessions.end()) {
-				sit->second.hangup();
-			}
-			Sessions.erase(sit);
-		}
-			break;
 		default:
 			break;
 		}
 	}
 
 	struct odict *villa_command_handler(const char* command,
-		struct odict *parms, const char* token)
+		struct odict *parms, const char* token, struct json_tcp *jt)
 	{
 		if (strcmp(command, "listen") == 0) {
 
@@ -676,11 +741,17 @@ extern "C" {
 				return create_response("answer", token, EINVAL);
 			}
 
+			call *call = cit->second;
+
 			int err = call_answer(cit->second, 200, VIDMODE_OFF);
 
 			if (!err) {
 				// Create the session
-				Sessions.insert(std::make_pair(cid,Session(cit->second)));
+				auto [it, _] = Sessions.insert(std::make_pair(cid, std::move(Session(call, jt))));
+
+				Session* session = &it->second;
+				call_set_handlers(call, villa_call_event_handler,
+		       		villa_dtmf_handler, session);
 			}
 
 			PendingCalls.erase(cit);
@@ -745,15 +816,6 @@ extern "C" {
 
 			return create_response("hangup", token, 0);
 		}
-	}
-
-	static void call_dtmf_handler(struct call *call, char key, void *arg)
-	{
-		Session *session = (Session*)arg;
-
-		DEBUG_PRINTF("villa: received DTMF event: key = '%c'\n", key ? key : '.');
-
-		session->dtmf(key);
 	}
 
 	int villa_status(struct re_printf *pf, void *arg)

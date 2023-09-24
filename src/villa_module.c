@@ -16,15 +16,13 @@
 extern void villa_event_handler(struct ua *ua, enum ua_event ev,
 	struct call *call, const char *prm, void *arg);
 
-extern void call_event_handler(struct call *call, enum call_event ev,
-	const char *str, void *arg);
-
 extern struct odict *villa_command_handler(const char* command,
-	const struct odict *parms, const char* token);
+	const struct odict *parms, const char* token, struct json_tcp *jt);
 
 extern int villa_status(struct re_printf *pf, void *arg);
 
 enum { CTRL_PORT = 1235 };
+
 struct ctrl_st {
 	struct tcp_sock *ts;
 	struct tcp_conn *tc;
@@ -114,7 +112,7 @@ static bool command_handler(const struct odict *od, int *errp, void *arg)
 		return true;
 	}
 
-	struct odict *resp = villa_command_handler(cmd, prm, tok);
+	struct odict *resp = villa_command_handler(cmd, prm, tok, st->jt);
 
 	int err = json_tcp_send(st->jt, resp);
 	if (err) {
@@ -277,10 +275,6 @@ static int module_init(void)
 	err = uag_event_register(ua_event_handler, ctrl);
 	if (err)
 		return err;
-
-	// err = message_listen(baresip_message(), message_handler, ctrl);
-	// if (err)
-	// 	return err;
 
 	err = cmd_register(baresip_commands(), cmdv, ARRAY_SIZE(cmdv));
 	if (err)

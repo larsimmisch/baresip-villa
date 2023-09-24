@@ -50,18 +50,28 @@ async def main():
     # low-level APIs.
     loop = asyncio.get_running_loop()
 
-    on_con_lost = loop.create_future()
-
-    transport, protocol = await loop.create_connection(
-        lambda: VillaProtocol(on_con_lost),
-        '127.0.0.1', 1235)
-
     # Wait until the protocol signals that the connection
     # is lost and close the transport.
-    try:
-        await on_con_lost
-    finally:
-        transport.close()
+    timeout = 0.125
+    while True:
+        transport = None
+        try:
+            on_con_lost = loop.create_future()
+
+            transport, protocol = await loop.create_connection(
+                lambda: VillaProtocol(on_con_lost),
+                '127.0.0.1', 1235)
+
+            timeout = 0.125
+            await on_con_lost
+
+        except ConnectionRefusedError as e:
+            if transport:
+                transport.close()
+            logging.info(f'connection refused, retrying after {timeout}')
+            await asyncio.sleep(timeout)
+            if timeout < 2.0:
+                timeout = timeout * 2
 
 
 logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s', level=logging.INFO)
