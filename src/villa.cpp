@@ -20,13 +20,6 @@ void play_stop_handler(struct play *play, void *arg);
 
 //-------------------------------------------------------------------------
 
-static ausrc_st* g_rec;
-static struct play *g_play;
-
-static VQueue vqueue;
-
-//-------------------------------------------------------------------------
-
 std::string mode_string(mode m) {
 
 	std::string modestr;
@@ -199,11 +192,11 @@ std::string Molecule::desc() const {
 // @pragma mark VQueue
 
 void VQueue::discard(Molecule* m) {
-	for (auto i = molecules[m->priority].begin();
-		i != molecules[m->priority].end(); ++i) {
+	for (auto i = _molecules[m->priority].begin();
+		i != _molecules[m->priority].end(); ++i) {
 
 		if (m == &(*i)) {
-			molecules[m->priority].erase(i);
+			_molecules[m->priority].erase(i);
 			break;
 		}
 	}
@@ -213,7 +206,8 @@ std::vector<Molecule>::iterator VQueue::next() {
 
 	for (int p = max_priority; p >= 0; --p) {
 
-		for (std::vector<Molecule>::iterator i = molecules[p].begin(); i != molecules[p].end(); ++i) {
+		for (std::vector<Molecule>::iterator i = _molecules[p].begin();
+			i != _molecules[p].end(); ++i) {
 
 			if (i->atoms.size()) {
 				return i;
@@ -276,20 +270,20 @@ int VQueue::schedule(Molecule* stopped) {
 
 		if (std::holds_alternative<Play>(a)) {
 
-			const Play& play = std::get<Play>(a);
+			Play& play = std::get<Play>(a);
 
 			DEBUG_INFO("playing %s\n", play.filename().c_str());
 
 			// mute
 			// audio_mute(audio, true);
 
-			int err = play_file_ext(&g_play, baresip_player(), play.filename().c_str(), 0,
-				cfg->audio.alert_mod, cfg->audio.alert_dev,
+			int err = play_file_ext(&play._play, baresip_player(), play.filename().c_str(), 0,
+				cfg->audio.alert_mod, _session->_id.c_str(),
 				play.offset());
 			if (err) {
 				return err;
 			}
-			play_set_finish_handler(g_play, play_stop_handler, (void*)&(*n));
+			play_set_finish_handler(play._play, play_stop_handler, (void*)&(*n));
 		}
 		else if (std::holds_alternative<DTMF>(a)) {
 
@@ -320,12 +314,12 @@ int VQueue::schedule(Molecule* stopped) {
 			// mute
 			// audio_mute(audio, true);
 
-			int err = play_file_ext(&g_play, baresip_player(), filename.c_str(), 0,
-					cfg->audio.alert_mod, cfg->audio.alert_dev, 0);
+			int err = play_file_ext(&d._play, baresip_player(), filename.c_str(), 0,
+					cfg->audio.alert_mod, _session->_id.c_str(), 0);
 			if (err) {
 				return err;
 			}
-			play_set_finish_handler(g_play, play_stop_handler, &(*n));
+			play_set_finish_handler(d._play, play_stop_handler, &(*n));
 		}
 		else if (std::holds_alternative<Record>(a)) {
 
@@ -359,7 +353,7 @@ int VQueue::schedule(Molecule* stopped) {
 
 			const struct ausrc *ausrc = ausrc_find(baresip_ausrcl(), "aufile");
 
-			int err = ausrc->alloch(&g_rec, ausrc,
+			int err = ausrc->alloch(&record._rec, ausrc,
 				&sprm, nullptr, nullptr, nullptr, nullptr);
 
 			if (err) {
@@ -367,7 +361,7 @@ int VQueue::schedule(Molecule* stopped) {
 			}
 		}
 
-		n = vqueue.next();
+		n = stopped->_queue->next();
 	}
 
 	if (n != end() && n->current == 0) {
@@ -379,11 +373,7 @@ int VQueue::schedule(Molecule* stopped) {
 
 int VQueue::enqueue(const Molecule& m, void* arg) {
 
-	vqueue.molecules[m.priority].push_back(m);
-
-	/* Stop the current player or recorder, if any */
-	g_play = (struct play*)mem_deref(g_play);
-	g_rec = (struct ausrc_st*)mem_deref(g_rec);
+	_molecules[m.priority].push_back(m);
 
 	auto stopped = next();
 	if (stopped != end()) {
@@ -393,181 +383,23 @@ int VQueue::enqueue(const Molecule& m, void* arg) {
 	return schedule(nullptr);
 }
 
-int VQueue::enqueue(const char* mdesc, void* arg) {
-
-	std::string smdesc(mdesc);
-	std::regex ws("\\s+");
-
-	std::sregex_token_iterator iter(smdesc.begin(), smdesc.end(), ws, -1);
-	std::sregex_token_iterator end;
-
-	std::vector<std::string> vec(iter, end);
-	std::vector<std::string> tokens;
-
-	for (auto a: vec)
-	{
-		std::smatch m;
-		if (!std::regex_match(a, m, ws)) {
-			tokens.push_back(a);
-		}
-	}
-
-	Molecule m;
-
-	auto token = tokens.begin();
-	if (token == tokens.end()) {
-		perror("missing priority");
-		return EINVAL;
-	}
-
-	try {
-		m.priority = std::stol(*token);
-	}
-	catch(std::exception&) {
-		perror("invalid priority");
-		return EINVAL;
-	}
-
-	++token;
-
-	if (token == tokens.end()) {
-		perror("missing mode");
-		return 0;
-	}
-
-	m.mode = (mode)0;
-
-	for (int i = 0; i < 2; ++i) {
-
-		if (*token == "loop") {
-			m.mode = (mode)(m.mode | m_loop);
-		}
-		else if (*token == "mute") {
-			m.mode = (mode)(m.mode | m_mute);
-		}
-		else if (*token == "discard") {
-			m.mode = (mode)(m.mode | m_discard);
-		}
-		else if (*token == "pause") {
-			m.mode = (mode)(m.mode | m_pause);
-		}
-		else if (*token == "restart") {
-			m.mode = (mode)(m.mode | m_restart);
-		}
-		else if (*token == "dont_interrupt") {
-			m.mode = (mode)(m.mode | m_dont_interrupt);
-		}
-		else {
-			break;
-		}
-		++token;
-
-		if (token == tokens.end()) {
-			perror("missing mode");
-			return 0;
-		}
-	}
-
-	DEBUG_INFO("adding Molecule priority: %d, mode: %s\n", m.priority, mode_string(m.mode).c_str());
-
-	while (token != tokens.end()) {
-
-		if (*token == "p" || *token == "play") {
-
-			++token;
-			if (token != tokens.end()) {
-				Play play;
-				play.set_filename(*token);
-
-				++token;
-				if (token != tokens.end()) {
-
-					if (!is_atom_start(*token)) {
-						play.set_offset(std::stol(*token));
-					}
-					else {
-						++token;
-					}
-				}
-
-				m.atoms.push_back(play);
-			}
-			else {
-				perror("No filename after play atom");
-				return 0;
-			}
-		}
-		else if (*token == "r" || *token == "record") {
-			++token;
-			if (token != tokens.end()) {
-				Record record;
-				record.set_filename(*token);
-
-				++token;
-				if (token != tokens.end()) {
-
-					if (!is_atom_start(*token)) {
-						record.set_max_silence(std::stol(*token));
-						++token;
-
-					}
-				}
-
-				m.atoms.push_back(record);
-			}
-			else {
-				perror("No filename after record atom");
-				return 0;
-			}
-		}
-		else if (*token == "d" || *token == "dtmf") {
-			++token;
-			if (token != tokens.end()) {
-				DTMF dtmf;
-				dtmf.set_dtmf(*token);
-				++token;
-
-				if (!is_atom_start(*token)) {
-					dtmf.set_inter_digit_delay(std::stol(*token));
-					++token;
-				}
-
-				m.atoms.push_back(dtmf);
-			}
-			else {
-				perror("No digits after atom_dtmf");
-				return 0;
-			}
-		}
-	}
-
-	if (m.atoms.size() == 0) {
-		perror("No atom in molecule");
-		return 0;
-	}
-
-	return enqueue(m, arg);
-}
-
 
 void play_stop_handler(struct play *play, void *arg) {
 
 	DEBUG_INFO("play file previous\n");
 	size_t now = tmr_jiffies();
 
-	/* Stop the current player or recorder, if any */
-	g_play = (struct play*)mem_deref(g_play);
-	g_rec = (struct ausrc_st*)mem_deref(g_rec);
-
 	Molecule* stopped = (Molecule*)arg;
 
 	stopped->time_stopped = now;
 	stopped->position = now - stopped->time_started;
 
-	vqueue.schedule((Molecule*)arg);
+	VQueue *queue = stopped->_queue;
+
+	queue->schedule(stopped);
 }
 
-Session::Session(struct call *call, struct json_tcp *jt) : _call(call), _jt(jt) {
+Session::Session(struct call *call, struct json_tcp *jt) : _call(call), _jt(jt), _queue(this) {
 	_id = call_id(call);
 }
 
@@ -625,14 +457,14 @@ std::unordered_map<std::string, Session> Sessions;
 std::vector<ua*> UserAgents;
 std::unordered_map<std::string,call*> PendingCalls;
 
-odict *create_response(const char* command, const char* token, int result)
+odict *create_response(const char* type, const char* token, int result)
 {
 	odict *od = nullptr;
 	odict_alloc(&od, DICT_BSIZE);
 
-	odict_entry_add(od, "type", ODICT_STRING, "response");
+	odict_entry_add(od, "type", ODICT_STRING, type);
 	odict_entry_add(od, "class", ODICT_STRING, "villa");
-	odict_entry_add(od, "command", ODICT_STRING, command);
+	odict_entry_add(od, "response", ODICT_BOOL, true);
 	if (token) {
 		odict_entry_add(od, "token", ODICT_STRING, token);
 	}
@@ -709,6 +541,21 @@ extern "C" {
 		}
 	}
 
+	size_t optional_offset(const odict* entry) {
+
+		size_t offset = 0;
+		const odict_entry *eo = odict_lookup(entry, "offset");
+		if (eo) {
+			if (odict_entry_type(eo) != ODICT_INT) {
+				DEBUG_PRINTF("villa: command enqueue: optional offset has invalid type");
+				return 0;
+			}
+			offset = odict_entry_int(eo);
+		}
+
+		return offset;
+	}
+
 	struct odict *villa_command_handler(const char* command,
 		struct odict *parms, const char* token, struct json_tcp *jt)
 	{
@@ -764,11 +611,14 @@ extern "C" {
 
 			if (!err) {
 				// Create the session
-				auto [it, _] = Sessions.insert(std::make_pair(cid, Session(call, jt)));
+				const auto [it, _] = Sessions.insert(std::make_pair(cid, Session(call, jt)));
 
 				Session* session = &it->second;
 				call_set_handlers(call, villa_call_event_handler,
 		       		villa_dtmf_handler, session);
+
+				// set the audio device names to the call id
+				audio_set_devicename(call_audio(call), cid.c_str(), cid.c_str());
 			}
 
 			PendingCalls.erase(cit);
@@ -816,23 +666,129 @@ extern "C" {
 
 			auto sit = Sessions.find(cid);
 			if (sit != Sessions.end()) {
-				sit->second.hangup();
-
-				call_hangup(sit->second._call, scode, reason);
+				sit->second.hangup(scode, reason);
 
 				Sessions.erase(sit);
 			}
 			else {
-
 				auto cit = PendingCalls.find(cid);
 				if (cit != PendingCalls.end()) {
+					call_hangup(cit->second, scode, reason);
 				}
-
-				int err = call_answer(cit->second, 200, VIDMODE_OFF);
+				else {
+					create_response("hangup", token, EINVAL);
+				}
 			}
 
 			return create_response("hangup", token, 0);
 		}
+		else if (strcmp(command, "enqueue") == 0) {
+
+			struct le *le = parms->lst.head;
+			if (!le) {
+				DEBUG_PRINTF("villa: command enqueue: missing parameters");
+				return nullptr;
+			}
+
+			const odict_entry *e = (const odict_entry*)le->data;
+			if (odict_entry_type(e) != ODICT_STRING) {
+				DEBUG_PRINTF("villa: command enqueue: parameter 1 (call_id) invalid type");
+				return nullptr;
+			}
+
+			const char *call_id = odict_entry_str(e);
+			auto sit = Sessions.find(call_id);
+			if (sit == Sessions.end()) {
+				DEBUG_PRINTF("villa: command enqueue: session not found");
+				return nullptr;
+			}
+
+			le = le->next;
+			if (!le) {
+				DEBUG_PRINTF("villa: command enqueue: parameter 2 (priority) missing");
+				return nullptr;
+			}
+
+			e = (const odict_entry*)le->data;
+			if (odict_entry_type(e) != ODICT_INT) {
+				DEBUG_PRINTF("villa: command enqueue: parameter 2 (priority) invalid type");
+				return nullptr;
+			}
+
+
+			Molecule m;
+			m.priority = odict_entry_int(e);
+
+			le = le->next;
+			if (!le) {
+				DEBUG_PRINTF("villa: command enqueue: parameter 3 (mode) missing");
+				return nullptr;
+			}
+
+			e = (const odict_entry*)le->data;
+			if (odict_entry_type(e) != ODICT_INT) {
+				DEBUG_PRINTF("villa: command enqueue: parameter 3 (mode) invalid type");
+				return nullptr;
+			}
+
+			m.mode = (mode)odict_entry_int(e);
+
+			for (int count = 4; le; le = le->next, ++count) {
+
+				e = (const odict_entry*)le->data;
+				if (odict_entry_type(e) != ODICT_OBJECT) {
+					DEBUG_PRINTF("villa: command enqueue: parameter %d (atom) invalid type", count);
+					return nullptr;
+				}
+
+				struct odict *atom = odict_entry_object(e);
+				std::string type(odict_string(atom, "type"));
+
+				if (type == "play") {
+					const char* filename = odict_string(atom, "filename");
+					if (!filename) {
+						DEBUG_PRINTF("villa: command enqueue: parameter %d (atom) invalid type", count);
+						return nullptr;
+					}
+
+					Play play(filename);
+					size_t offset = optional_offset(atom);
+					if (offset) {
+						play.set_offset(offset);
+					}
+
+					m.atoms.push_back(play);
+				}
+				else if (type == "record") {
+					const char* filename = odict_string(atom, "filename");
+					if (!filename) {
+						DEBUG_PRINTF("villa: command enqueue: parameter %d (atom) filename has invalid type", count);
+						return nullptr;
+					}
+
+					Record record(filename);
+					m.atoms.push_back(record);
+				}
+				else if (type == "dtmf") {
+					const char* digits = odict_string(atom, "digits");
+					if (!digits) {
+						DEBUG_PRINTF("villa: command enqueue: parameter %d (atom) digits has invalid type", count);
+						return nullptr;
+					}
+
+					DTMF dtmf(digits);
+					size_t offset = optional_offset(atom);
+					if (offset) {
+						dtmf.set_offset(offset);
+					}
+					m.atoms.push_back(dtmf);
+				}
+			}
+
+			return create_response("enqueue", token, 0);
+		}
+
+		return nullptr;
 	}
 
 	int villa_status(struct re_printf *pf, void *arg)

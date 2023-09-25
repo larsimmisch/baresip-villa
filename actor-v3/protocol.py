@@ -17,10 +17,16 @@ class VillaProtocol(asyncio.Protocol):
     def connection_made(self, transport):
         logging.info('connected')
         self.transport = transport
-        self.send({ 'command': 'listen', 'params': ['<sip:villa@immisch-macbook-pro.local>'] })
+        self.send({ 'type': 'listen', 'command' : True,
+                   'params': ['<sip:villa@immisch-macbook-pro.local>'] })
 
     def call_incoming(self, data):
-        self.send({ 'command': 'answer', 'params': [data["id"]] })
+        call_id = data['id']
+        self.send({ 'type': 'answer', 'command': True, 'params': [call_id] })
+
+    def response_received(self, command, token, status):
+        if command == 'answer':
+            pass
 
     def data_received(self, data):
         data = self.current_message + data.decode()

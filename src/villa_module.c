@@ -103,7 +103,7 @@ static bool command_handler(const struct odict *od, int *errp, void *arg)
 {
 	struct ctrl_st *st = arg;
 
-	const char *cmd = odict_string(od, "command");
+	const char *cmd = odict_string(od, "type");
 	struct odict *prm = odict_get_array(od, "params");
 	const char *tok = odict_string(od, "token");
 	if (!cmd) {

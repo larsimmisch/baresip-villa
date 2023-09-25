@@ -30,6 +30,9 @@ public:
 
 	Play() {}
 	Play(const std::string& filename) { set_filename(filename); };
+	~Play() { stop(); }
+
+	void stop() { _play = (struct play*)mem_deref(_play); }
 
 	// returns the size in ms or 0 in case of an error
 	size_t set_filename(const std::string& filename);
@@ -39,6 +42,8 @@ public:
 	size_t offset() const { return _offset; }
 
 	size_t length() const { return _length; }
+
+	struct play *_play = nullptr;
 
 protected:
 
@@ -53,6 +58,9 @@ public:
 
 	Record() {}
 	Record(const std::string& filename) : _filename(filename) {}
+	~Record() { stop(); }
+
+	void stop() { _rec = (struct ausrc_st*)mem_deref(_rec); }
 
 	void set_filename(const std::string& filename) { _filename = filename; }
 	const std::string& filename() const { return _filename; }
@@ -61,6 +69,8 @@ public:
 	size_t max_silence() const { return _max_silence; }
 
 	size_t length() const { return _length; }
+
+	struct ausrc_st* _rec = nullptr;
 
 protected:
 
@@ -91,6 +101,8 @@ public:
 
 	size_t length() const { return _length; }
 
+	struct play *_play = nullptr;
+
 protected:
 
 	std::string _dtmf;
@@ -102,6 +114,7 @@ protected:
 
 using Atom = std::variant<Play, Record, DTMF>;
 
+struct VQueue;
 struct Molecule {
 	std::vector<Atom> atoms;
 	size_t time_started = 0;
@@ -110,6 +123,7 @@ struct Molecule {
 	size_t current = 0;
 	int priority = 0;
 	mode mode;
+	VQueue *_queue;
 
 	size_t length(int start = 0, int end = -1) const;
 	void set_position(size_t position_ms);
@@ -117,19 +131,23 @@ struct Molecule {
 	std::string desc() const;
 };
 
+struct Session;
 struct VQueue {
+
+	VQueue(Session *session = nullptr) : _session(session) {}
 
 	void discard(Molecule* m);
 	std::vector<Molecule>::iterator next();
-	std::vector<Molecule>::iterator end() { return molecules[0].end(); }
+	std::vector<Molecule>::iterator end() { return _molecules[0].end(); }
 
 	int schedule(Molecule* stopped);
 
 	int enqueue(const Molecule& m, void* arg);
 	int enqueue(const char* mdesc, void* arg);
 
-	std::vector<Molecule> molecules[max_priority];
-	int current_id;
+	std::vector<Molecule> _molecules[max_priority];
+	int _current_id;
+	Session *_session;
 };
 
 struct Session {
@@ -146,6 +164,10 @@ struct Session {
 
 		_jt = other._jt;
 		other._jt = nullptr;
+
+		other._queue._session = this;
+		_queue = std::move(other._queue);
+		_queue._session = this;
 	}
 
 	virtual ~Session();
@@ -156,8 +178,9 @@ struct Session {
 	std::string _id;
 	std::string _dtmf;
 	std::chrono::time_point<std::chrono::system_clock> _dtmf_start;
-	struct call *_call = nullptr;
+	struct call *_call;
 	struct json_tcp *_jt;
+	VQueue _queue;
 };
 
 #endif // #define _VILLA_H_
