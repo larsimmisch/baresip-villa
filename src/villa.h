@@ -114,27 +114,38 @@ protected:
 
 using Atom = std::variant<Play, Record, DTMF>;
 
-struct VQueue;
+struct Session;
 struct Molecule {
-	std::vector<Atom> atoms;
-	size_t time_started = 0;
-	size_t time_stopped = 0;
-	size_t position = 0;
-	size_t current = 0;
-	int priority = 0;
-	mode mode;
-	VQueue *_queue;
+
+	Molecule(Session *session) : _session(session) { _current = _atoms.end(); }
+
+	void push_back(const Atom &a) {
+		_atoms.push_back(a);
+		_current = begin();
+	}
+
+	std::vector<Atom>::iterator begin() { return _atoms.begin(); }
+	std::vector<Atom>::iterator end() { return _atoms.end(); }
+
+	std::vector<Atom> _atoms;
+	size_t _time_started = 0;
+	size_t _time_stopped = 0;
+	size_t _position = 0;
+	std::vector<Atom>::iterator _current;
+	int _priority = 0;
+	mode _mode;
+	Session *_session;
 
 	size_t length(int start = 0, int end = -1) const;
 	void set_position(size_t position_ms);
 	// return a description of the Molecule
 	std::string desc() const;
 };
-
-struct Session;
 struct VQueue {
 
-	VQueue(Session *session = nullptr) : _session(session) {}
+	VQueue(Session *session = nullptr) : _session(session) {
+		_molecules.resize(max_priority + 1);
+	}
 
 	void discard(Molecule* m);
 	std::vector<Molecule>::iterator next();
@@ -142,10 +153,9 @@ struct VQueue {
 
 	int schedule(Molecule* stopped);
 
-	int enqueue(const Molecule& m, void* arg);
-	int enqueue(const char* mdesc, void* arg);
+	int enqueue(const Molecule& m);
 
-	std::vector<Molecule> _molecules[max_priority];
+	std::vector<std::vector<Molecule> > _molecules;
 	int _current_id;
 	Session *_session;
 };
@@ -165,7 +175,6 @@ struct Session {
 		_jt = other._jt;
 		other._jt = nullptr;
 
-		other._queue._session = this;
 		_queue = std::move(other._queue);
 		_queue._session = this;
 	}
@@ -180,6 +189,7 @@ struct Session {
 	std::chrono::time_point<std::chrono::system_clock> _dtmf_start;
 	struct call *_call;
 	struct json_tcp *_jt;
+	struct player *_player = nullptr;
 	VQueue _queue;
 };
 

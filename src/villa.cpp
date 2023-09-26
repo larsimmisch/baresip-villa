@@ -101,12 +101,12 @@ size_t Molecule::length(int start, int end) const {
 	size_t l = 0;
 
 	if (end < 0) {
-		end = atoms.size();
+		end = _atoms.size();
 	}
 
 	for (int i = start; i < end; ++i) {
 
-		const Atom& a = atoms[i];
+		const Atom& a = _atoms[i];
 
 		if (std::holds_alternative<Play>(a)) {
 			l += std::get<Play>(a).length();
@@ -128,36 +128,34 @@ void Molecule::set_position(size_t position) {
 	size_t l = 0;
 	size_t l_prev = 0;
 
-	if (mode & m_loop) {
+	if (_mode & m_loop) {
 		position %= length();
 	}
 
-	for (size_t i = 0; i < atoms.size(); ++i) {
+	for (auto a = _atoms.begin(); a != _atoms.end(); ++a) {
 
-		Atom& a = atoms[i];
-
-		if (std::holds_alternative<Play>(a)) {
-			l += std::get<Play>(a).length();
+		if (std::holds_alternative<Play>(*a)) {
+			l += std::get<Play>(*a).length();
 		}
-		else if (std::holds_alternative<DTMF>(a)) {
-			l += std::get<DTMF>(a).length();
+		else if (std::holds_alternative<DTMF>(*a)) {
+			l += std::get<DTMF>(*a).length();
 		}
-		else if (std::holds_alternative<Record>(a)) {
-			l += std::get<Record>(a).length();
+		else if (std::holds_alternative<Record>(*a)) {
+			l += std::get<Record>(*a).length();
 		}
 
 		if (l >= position) {
-			if (mode & m_mute) {
+			if (_mode & m_mute) {
 
 				size_t offset = (position - l_prev);
 
-				current = i;
+				_current = a;
 
-				if (std::holds_alternative<Play>(a)) {
-					std::get<Play>(a).set_offset(offset);
+				if (std::holds_alternative<Play>(*a)) {
+					std::get<Play>(*a).set_offset(offset);
 				}
-				else if (std::holds_alternative<DTMF>(a)) {
-					std::get<DTMF>(a).set_offset(offset);
+				else if (std::holds_alternative<DTMF>(*a)) {
+					std::get<DTMF>(*a).set_offset(offset);
 				}
 
 				return;
@@ -169,9 +167,9 @@ void Molecule::set_position(size_t position) {
 }
 
 std::string Molecule::desc() const {
-	std::string desc = std::to_string(priority) + ' ' + mode_string(mode);
+	std::string desc = std::to_string(_priority) + ' ' + mode_string(_mode);
 
-	for (auto a: atoms) {
+	for (auto a: _atoms) {
 		if (std::holds_alternative<Play>(a)) {
 			const Play& p = std::get<Play>(a);
 			desc += " play " + p.filename();
@@ -192,11 +190,11 @@ std::string Molecule::desc() const {
 // @pragma mark VQueue
 
 void VQueue::discard(Molecule* m) {
-	for (auto i = _molecules[m->priority].begin();
-		i != _molecules[m->priority].end(); ++i) {
+	for (auto i = _molecules[m->_priority].begin();
+		i != _molecules[m->_priority].end(); ++i) {
 
 		if (m == &(*i)) {
-			_molecules[m->priority].erase(i);
+			_molecules[m->_priority].erase(i);
 			break;
 		}
 	}
@@ -206,10 +204,10 @@ std::vector<Molecule>::iterator VQueue::next() {
 
 	for (int p = max_priority; p >= 0; --p) {
 
-		for (std::vector<Molecule>::iterator i = _molecules[p].begin();
+		for (auto i = _molecules[p].begin();
 			i != _molecules[p].end(); ++i) {
 
-			if (i->atoms.size()) {
+			if (i->_atoms.size()) {
 				return i;
 			}
 		}
@@ -227,160 +225,163 @@ int VQueue::schedule(Molecule* stopped) {
 
 	if (stopped) {
 		// Just remove Molecules with m_discard
-		if (stopped->mode & m_discard) {
+		if (stopped->_mode & m_discard) {
 			discard(stopped);
-			n = next();
 		}
 		else if (n != end() && stopped == &(*n)) {
 			// The current molecule was stopped
-			++n->current;
-			if (n->current >= n->atoms.size()) {
-				discard(stopped);
-				n = next();
-			}
+			++n->_current;
 		}
 	}
 
-	while (n != end()) {
+	if (n != end()) {
 
-		if (n->mode & m_pause) {
-			n->set_position(n->position);
+		if (n->_mode & m_pause) {
+			n->set_position(n->_position);
 		}
-		else {
-			size_t pos = now - n->time_stopped;
+		else if (n->_time_stopped) {
+			size_t pos = now - n->_time_stopped;
 
-			if (n->mode & m_mute) {
+			if (n->_mode & m_mute) {
 
 				if (pos >= n->length()) {
-					if (n->mode & m_mute) {
+					if (n->_mode & m_mute) {
 						discard(&(*n));
 						n = next();
 					}
-					else if (n->mode & m_loop) {
+					else if (n->_mode & m_loop) {
 						pos = pos % n->length();
 					}
 
 					n->set_position(pos);
-					break;
 				}
 			}
 		}
 
-		Atom a = n->atoms[n->current];
+		if (n->_current != n->end()) {
 
-		if (std::holds_alternative<Play>(a)) {
+			Atom &a = *n->_current;
 
-			Play& play = std::get<Play>(a);
+			if (std::holds_alternative<Play>(a)) {
 
-			DEBUG_INFO("playing %s\n", play.filename().c_str());
+				Play& play = std::get<Play>(a);
 
-			// mute
-			// audio_mute(audio, true);
-
-			int err = play_file_ext(&play._play, baresip_player(), play.filename().c_str(), 0,
-				cfg->audio.alert_mod, _session->_id.c_str(),
-				play.offset());
-			if (err) {
-				return err;
+				int err = play_file_ext(&play._play, _session->_player,
+					play.filename().c_str(), 0, "default", _session->_id.c_str(),
+					play.offset());
+				if (err) {
+					DEBUG_PRINTF("play %s failed: %s\n", play.filename().c_str(), strerror(err));
+					n->_current = n->_atoms.erase(n->_current);
+					return err;
+				}
+				else {
+					DEBUG_INFO("playing %s\n", play.filename().c_str());
+				}
+				play_set_finish_handler(play._play, play_stop_handler, (void*)&(*n));
 			}
-			play_set_finish_handler(play._play, play_stop_handler, (void*)&(*n));
-		}
-		else if (std::holds_alternative<DTMF>(a)) {
+			else if (std::holds_alternative<DTMF>(a)) {
 
-			DTMF& d = std::get<DTMF>(a);
+				DTMF& d = std::get<DTMF>(a);
 
-			if (++d > d.size()) {
-				d.reset();
-				n->current++;
-				if (n->current >= n->atoms.size()) {
-					return schedule(&(*n));
+				if (++d > d.size()) {
+					d.reset();
+					++n->_current;
+					if (n->_current != n->_atoms.end()) {
+						return schedule(&(*n));
+					}
+				}
+
+				std:: string filename = "sound";
+				if (d.current() == '*') {
+					filename += "star.wav";
+				}
+				else if (d.current() == '#') {
+					filename += "route.wav";
+				}
+				else {
+					filename.append((char)tolower(d.current()), 1);
+					filename += ".wav";
+				}
+
+				DEBUG_INFO("DTMF playing %s\n", filename.c_str());
+
+				// mute
+				// audio_mute(audio, true);
+
+				int err = play_file_ext(&d._play, baresip_player(), filename.c_str(), 0,
+						"default", _session->_id.c_str(), 0);
+				if (err) {
+					return err;
+				}
+				play_set_finish_handler(d._play, play_stop_handler, &(*n));
+			}
+			else if (std::holds_alternative<Record>(a)) {
+
+				// unmute
+				// audio_mute(audio, false);
+
+				Record& record = std::get<Record>(a);
+
+				uint32_t srate = 0;
+				uint32_t channels = 0;
+
+				conf_get_u32(conf_cur(), "file_srate", &srate);
+				conf_get_u32(conf_cur(), "file_channels", &channels);
+
+				if (!srate) {
+					srate = 16000;
+				}
+
+				if (!channels) {
+					channels = 1;
+				}
+
+				ausrc_prm sprm;
+
+				sprm.ch = channels;
+				sprm.srate = srate;
+				sprm.ptime = PTIME;
+				sprm.fmt = AUFMT_S16LE;
+
+				DEBUG_INFO("recording %s\n", record.filename().c_str());
+
+				const struct ausrc *ausrc = ausrc_find(baresip_ausrcl(), "aufile");
+
+				int err = ausrc->alloch(&record._rec, ausrc,
+					&sprm, nullptr, nullptr, nullptr, nullptr);
+
+				if (err) {
+					return err;
 				}
 			}
-
-			std:: string filename = "sound";
-			if (d.current() == '*') {
-				filename += "star.wav";
-			}
-			else if (d.current() == '#') {
-				filename += "route.wav";
-			}
-			else {
-				filename.append((char)tolower(d.current()), 1);
-				filename += ".wav";
-			}
-
-			DEBUG_INFO("DTMF playing %s\n", filename.c_str());
-
-			// mute
-			// audio_mute(audio, true);
-
-			int err = play_file_ext(&d._play, baresip_player(), filename.c_str(), 0,
-					cfg->audio.alert_mod, _session->_id.c_str(), 0);
-			if (err) {
-				return err;
-			}
-			play_set_finish_handler(d._play, play_stop_handler, &(*n));
 		}
-		else if (std::holds_alternative<Record>(a)) {
-
-			// unmute
-			// audio_mute(audio, false);
-
-			Record& record = std::get<Record>(a);
-
-			uint32_t srate = 0;
-			uint32_t channels = 0;
-
-			conf_get_u32(conf_cur(), "file_srate", &srate);
-			conf_get_u32(conf_cur(), "file_channels", &channels);
-
-			if (!srate) {
-				srate = 16000;
-			}
-
-			if (!channels) {
-				channels = 1;
-			}
-
-			ausrc_prm sprm;
-
-			sprm.ch = channels;
-			sprm.srate = srate;
-			sprm.ptime = PTIME;
-			sprm.fmt = AUFMT_S16LE;
-
-			DEBUG_INFO("recording %s\n", record.filename().c_str());
-
-			const struct ausrc *ausrc = ausrc_find(baresip_ausrcl(), "aufile");
-
-			int err = ausrc->alloch(&record._rec, ausrc,
-				&sprm, nullptr, nullptr, nullptr, nullptr);
-
-			if (err) {
-				return err;
-			}
-		}
-
-		n = stopped->_queue->next();
 	}
 
-	if (n != end() && n->current == 0) {
-		n->time_started = tmr_jiffies();
+	if (n != end()) {
+		n->_time_started = tmr_jiffies();
 	}
 
 	return 0;
 }
 
-int VQueue::enqueue(const Molecule& m, void* arg) {
-
-	_molecules[m.priority].push_back(m);
+int VQueue::enqueue(const Molecule& m) {
 
 	auto stopped = next();
-	if (stopped != end()) {
-		return schedule(&(*stopped));
+
+	_molecules[m._priority].push_back(m);
+
+	if (stopped == end()) {
+		return schedule(nullptr);
 	}
 
-	return schedule(nullptr);
+	if (stopped->_current != stopped->end()) {
+		Atom &a = *stopped->_current;
+
+		if (std::holds_alternative<Play>(a)) {
+			std::get<Play>(a).stop();
+		}
+	}
+	return schedule(&(*stopped));
 }
 
 
@@ -390,13 +391,15 @@ void play_stop_handler(struct play *play, void *arg) {
 	size_t now = tmr_jiffies();
 
 	Molecule* stopped = (Molecule*)arg;
+	assert(stopped);
 
-	stopped->time_stopped = now;
-	stopped->position = now - stopped->time_started;
+	stopped->_time_stopped = now;
+	stopped->_position = now - stopped->_time_started;
 
-	VQueue *queue = stopped->_queue;
+	assert(stopped->_session);
+	VQueue &queue = stopped->_session->_queue;
 
-	queue->schedule(stopped);
+	queue.schedule(stopped);
 }
 
 Session::Session(struct call *call, struct json_tcp *jt) : _call(call), _jt(jt), _queue(this) {
@@ -447,6 +450,8 @@ void Session::hangup(int16_t scode, const char* reason) {
 
 		json_tcp_send(_jt, od);
 	}
+
+	_player = (struct player*)mem_deref(_player);
 }
 
 Session::~Session() {
@@ -617,7 +622,9 @@ extern "C" {
 				call_set_handlers(call, villa_call_event_handler,
 		       		villa_dtmf_handler, session);
 
-				// set the audio device names to the call id
+				play_init(&session->_player);
+				play_set_path(session->_player, "/usr/local/share/baresip");
+
 				audio_set_devicename(call_audio(call), cid.c_str(), cid.c_str());
 			}
 
@@ -703,6 +710,8 @@ extern "C" {
 				return nullptr;
 			}
 
+			Session& session = sit->second;
+
 			le = le->next;
 			if (!le) {
 				DEBUG_PRINTF("villa: command enqueue: parameter 2 (priority) missing");
@@ -715,9 +724,8 @@ extern "C" {
 				return nullptr;
 			}
 
-
-			Molecule m;
-			m.priority = odict_entry_int(e);
+			Molecule m(&session);
+			m._priority = odict_entry_int(e);
 
 			le = le->next;
 			if (!le) {
@@ -731,9 +739,10 @@ extern "C" {
 				return nullptr;
 			}
 
-			m.mode = (mode)odict_entry_int(e);
+			m._mode = (mode)odict_entry_int(e);
 
-			for (int count = 4; le; le = le->next, ++count) {
+			int count = 4;
+			for (le = le->next; le; le = le->next, ++count) {
 
 				e = (const odict_entry*)le->data;
 				if (odict_entry_type(e) != ODICT_OBJECT) {
@@ -757,7 +766,7 @@ extern "C" {
 						play.set_offset(offset);
 					}
 
-					m.atoms.push_back(play);
+					m.push_back(play);
 				}
 				else if (type == "record") {
 					const char* filename = odict_string(atom, "filename");
@@ -767,7 +776,7 @@ extern "C" {
 					}
 
 					Record record(filename);
-					m.atoms.push_back(record);
+					m.push_back(record);
 				}
 				else if (type == "dtmf") {
 					const char* digits = odict_string(atom, "digits");
@@ -781,9 +790,11 @@ extern "C" {
 					if (offset) {
 						dtmf.set_offset(offset);
 					}
-					m.atoms.push_back(dtmf);
+					m.push_back(dtmf);
 				}
 			}
+
+			session._queue.enqueue(m);
 
 			return create_response("enqueue", token, 0);
 		}
