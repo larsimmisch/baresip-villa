@@ -100,23 +100,12 @@ size_t Play::set_filename(const std::string& filename) {
 size_t Molecule::length(int start, int end) const {
 	size_t l = 0;
 
-	if (end < 0) {
-		end = _atoms.size();
+	if (end <= 0) {
+		end = _atoms.size() - end;
 	}
 
 	for (int i = start; i < end; ++i) {
-
-		const Atom& a = _atoms[i];
-
-		if (std::holds_alternative<Play>(a)) {
-			l += std::get<Play>(a).length();
-		}
-		else if (std::holds_alternative<DTMF>(a)) {
-			l += std::get<DTMF>(a).length();
-		}
-		if (std::holds_alternative<Record>(a)) {
-			l += std::get<Record>(a).length();
-		}
+		l += _atoms[i]->length();
 	}
 
 	return l;
@@ -132,31 +121,17 @@ void Molecule::set_position(size_t position) {
 		position %= length();
 	}
 
-	for (auto a = _atoms.begin(); a != _atoms.end(); ++a) {
+	for (int i = 0; i < _atoms.size(); i) {
 
-		if (std::holds_alternative<Play>(*a)) {
-			l += std::get<Play>(*a).length();
-		}
-		else if (std::holds_alternative<DTMF>(*a)) {
-			l += std::get<DTMF>(*a).length();
-		}
-		else if (std::holds_alternative<Record>(*a)) {
-			l += std::get<Record>(*a).length();
-		}
+		AudioOpPtr a = _atoms[i];
+		l += a->length();
 
 		if (l >= position) {
 			if (_mode & m_mute) {
-
 				size_t offset = (position - l_prev);
 
-				_current = a;
-
-				if (std::holds_alternative<Play>(*a)) {
-					std::get<Play>(*a).set_offset(offset);
-				}
-				else if (std::holds_alternative<DTMF>(*a)) {
-					std::get<DTMF>(*a).set_offset(offset);
-				}
+				_current = i;
+				a->set_offset(offset);
 
 				return;
 			}
@@ -169,19 +144,8 @@ void Molecule::set_position(size_t position) {
 std::string Molecule::desc() const {
 	std::string desc = std::to_string(_priority) + ' ' + mode_string(_mode);
 
-	for (auto a: _atoms) {
-		if (std::holds_alternative<Play>(a)) {
-			const Play& p = std::get<Play>(a);
-			desc += " play " + p.filename();
-		}
-		else if (std::holds_alternative<DTMF>(a)) {
-			const DTMF& d = std::get<DTMF>(a);
-			desc += " dtmf " + d.dtmf();
-		}
-		else if (std::holds_alternative<Record>(a)) {
-			const Record& r = std::get<Record>(a);
-			desc += " record " + r.filename();
-		}
+	for (auto &a: _atoms) {
+		desc += a->desc();
 	}
 
 	return desc;
@@ -216,6 +180,74 @@ std::vector<Molecule>::iterator VQueue::next() {
 	return end();
 }
 
+int Play::start(Molecule *m) {
+
+	int err = play_file_ext(&_play, m->_session->_player, _filename.c_str(),
+		0, "auplay", "", offset());
+
+	if (err) {
+		return err;
+	}
+	play_set_finish_handler(_play, play_stop_handler, m);
+	return err;
+}
+
+int Record::start(Molecule *m) {
+
+	uint32_t srate = 0;
+	uint32_t channels = 0;
+
+	conf_get_u32(conf_cur(), "file_srate", &srate);
+	conf_get_u32(conf_cur(), "file_channels", &channels);
+
+	if (!srate) {
+		srate = 16000;
+	}
+
+	if (!channels) {
+		channels = 1;
+	}
+
+	ausrc_prm sprm;
+
+	sprm.ch = channels;
+	sprm.srate = srate;
+	sprm.ptime = PTIME;
+	sprm.fmt = AUFMT_S16LE;
+
+	const struct ausrc *ausrc = ausrc_find(baresip_ausrcl(), "aufile");
+
+	int err = ausrc->alloch(&_rec, ausrc,
+		&sprm, nullptr, nullptr, nullptr, nullptr);
+
+	return err;
+}
+
+int DTMF::start(Molecule *m) {
+
+	std:: string filename = "sound";
+	if (current() == '*') {
+		filename += "star.wav";
+	}
+	else if (current() == '#') {
+		filename += "route.wav";
+	}
+	else {
+		filename.append((char)tolower(current()), 1);
+		filename += ".wav";
+	}
+
+	int err = play_file_ext(&_play, m->_session->_player, filename.c_str(), 0,
+			"aufile", "", 0);
+	if (err) {
+		return err;
+	}
+	++_pos;
+	play_set_finish_handler(_play, play_stop_handler, m);
+
+	return err;
+}
+
 int VQueue::schedule(Molecule* stopped) {
 
 	struct config *cfg = conf_config();
@@ -224,6 +256,15 @@ int VQueue::schedule(Molecule* stopped) {
 	std::vector<Molecule>::iterator n = next();
 
 	if (stopped) {
+
+		// Special case for composite AudioOps like DTMF
+		if (stopped->_current < stopped->size() && stopped == &(*n)) {
+
+			if (!stopped->_atoms[stopped->_current]->done()) {
+				return stopped->_atoms[stopped->_current]->start(stopped);
+			}
+		}
+
 		// Just remove Molecules with m_discard
 		if (stopped->_mode & m_discard) {
 			discard(stopped);
@@ -258,101 +299,19 @@ int VQueue::schedule(Molecule* stopped) {
 			}
 		}
 
-		if (n->_current != n->end()) {
+		if (n->_current < n->size()) {
 
-			Atom &a = *n->_current;
+			AudioOpPtr &a = n->_atoms[n->_current];
 
-			if (std::holds_alternative<Play>(a)) {
-
-				Play& play = std::get<Play>(a);
-
-				int err = play_file_ext(&play._play, _session->_player,
-					play.filename().c_str(), 0, "default", _session->_id.c_str(),
-					play.offset());
-				if (err) {
-					DEBUG_PRINTF("play %s failed: %s\n", play.filename().c_str(), strerror(err));
-					n->_current = n->_atoms.erase(n->_current);
-					return err;
-				}
-				else {
-					DEBUG_INFO("playing %s\n", play.filename().c_str());
-				}
-				play_set_finish_handler(play._play, play_stop_handler, (void*)&(*n));
+			int err = a->start(&*n);
+			if (err) {
+				DEBUG_PRINTF("%s failed: %s\n", a->desc().c_str(), strerror(err));
+				n->_atoms.erase(n->_atoms.begin() + n->_current);
+				n->_current++;
+				return err;
 			}
-			else if (std::holds_alternative<DTMF>(a)) {
-
-				DTMF& d = std::get<DTMF>(a);
-
-				if (++d > d.size()) {
-					d.reset();
-					++n->_current;
-					if (n->_current != n->_atoms.end()) {
-						return schedule(&(*n));
-					}
-				}
-
-				std:: string filename = "sound";
-				if (d.current() == '*') {
-					filename += "star.wav";
-				}
-				else if (d.current() == '#') {
-					filename += "route.wav";
-				}
-				else {
-					filename.append((char)tolower(d.current()), 1);
-					filename += ".wav";
-				}
-
-				DEBUG_INFO("DTMF playing %s\n", filename.c_str());
-
-				// mute
-				// audio_mute(audio, true);
-
-				int err = play_file_ext(&d._play, baresip_player(), filename.c_str(), 0,
-						"default", _session->_id.c_str(), 0);
-				if (err) {
-					return err;
-				}
-				play_set_finish_handler(d._play, play_stop_handler, &(*n));
-			}
-			else if (std::holds_alternative<Record>(a)) {
-
-				// unmute
-				// audio_mute(audio, false);
-
-				Record& record = std::get<Record>(a);
-
-				uint32_t srate = 0;
-				uint32_t channels = 0;
-
-				conf_get_u32(conf_cur(), "file_srate", &srate);
-				conf_get_u32(conf_cur(), "file_channels", &channels);
-
-				if (!srate) {
-					srate = 16000;
-				}
-
-				if (!channels) {
-					channels = 1;
-				}
-
-				ausrc_prm sprm;
-
-				sprm.ch = channels;
-				sprm.srate = srate;
-				sprm.ptime = PTIME;
-				sprm.fmt = AUFMT_S16LE;
-
-				DEBUG_INFO("recording %s\n", record.filename().c_str());
-
-				const struct ausrc *ausrc = ausrc_find(baresip_ausrcl(), "aufile");
-
-				int err = ausrc->alloch(&record._rec, ausrc,
-					&sprm, nullptr, nullptr, nullptr, nullptr);
-
-				if (err) {
-					return err;
-				}
+			else {
+				DEBUG_INFO("%s started\n", a->desc().c_str());
 			}
 		}
 	}
@@ -374,12 +333,9 @@ int VQueue::enqueue(const Molecule& m) {
 		return schedule(nullptr);
 	}
 
-	if (stopped->_current != stopped->end()) {
-		Atom &a = *stopped->_current;
-
-		if (std::holds_alternative<Play>(a)) {
-			std::get<Play>(a).stop();
-		}
+	if (stopped->_current >= stopped->size()) {
+		AudioOpPtr &a = stopped->_atoms[stopped->_current];
+		a->stop();
 	}
 	return schedule(&(*stopped));
 }
@@ -760,13 +716,12 @@ extern "C" {
 						return nullptr;
 					}
 
-					Play play(filename);
+					m.push_back(std::make_shared<Play>(filename));
+
 					size_t offset = optional_offset(atom);
 					if (offset) {
-						play.set_offset(offset);
+						m.back()->set_offset(offset);
 					}
-
-					m.push_back(play);
 				}
 				else if (type == "record") {
 					const char* filename = odict_string(atom, "filename");
@@ -775,8 +730,7 @@ extern "C" {
 						return nullptr;
 					}
 
-					Record record(filename);
-					m.push_back(record);
+					m.push_back(std::make_shared<Record>(filename));
 				}
 				else if (type == "dtmf") {
 					const char* digits = odict_string(atom, "digits");
@@ -785,12 +739,11 @@ extern "C" {
 						return nullptr;
 					}
 
-					DTMF dtmf(digits);
+					m.push_back(std::make_shared<DTMF>(digits));
 					size_t offset = optional_offset(atom);
 					if (offset) {
-						dtmf.set_offset(offset);
+						m.back()->set_offset(offset);
 					}
-					m.push_back(dtmf);
 				}
 			}
 

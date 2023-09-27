@@ -14,6 +14,18 @@ enum { PTIME = 40 };
 
 const int max_priority = 5;
 
+template<typename X>
+struct deleter {
+	void operator()(X* x) const {
+		x = (X*)mem_deref(x);
+	}
+};
+
+// Wrapping raw pointers
+
+using play_ptr = std::unique_ptr<struct play, deleter<struct play> >;
+using ausrc_st_ptr = std::unique_ptr<struct ausrc_st, deleter<struct ausrc_st> >;
+
 enum mode {
 	m_discard = 1,
 	m_pause = 2,
@@ -24,43 +36,65 @@ enum mode {
 	m_last = 32,
 };
 
-class Play {
+
+struct Session;
+struct Molecule;
+
+struct AudioOp {
+
+	virtual int start(Molecule *) = 0;
+	virtual void stop() = 0;
+
+	// length in ms
+	virtual size_t length() const  = 0;
+
+	virtual void set_offset(size_t) {}
+	virtual size_t offset() const { return 0; }
+
+	virtual bool done() { return true; }
+
+	virtual std::string desc() = 0;
+};
+
+using AudioOpPtr = std::shared_ptr<AudioOp>;
+
+class Play : public AudioOp {
 
 public:
 
-	Play() {}
 	Play(const std::string& filename) { set_filename(filename); };
-	~Play() { stop(); }
+	virtual ~Play() { stop(); }
 
-	void stop() { _play = (struct play*)mem_deref(_play); }
+	virtual int start(Molecule *);
+	virtual void stop() { _play = (struct play*)mem_deref(_play); }
 
-	// returns the size in ms or 0 in case of an error
 	size_t set_filename(const std::string& filename);
 	const std::string& filename() const { return _filename; }
 
-	void set_offset(size_t offset) { _offset = offset; }
-	size_t offset() const { return _offset; }
+	virtual void set_offset(size_t offset) { _offset = offset; }
+	virtual size_t offset() const { return _offset; }
 
-	size_t length() const { return _length; }
+	virtual size_t length() const { return _length; }
 
-	struct play *_play = nullptr;
+	virtual std::string desc() { return std::string("play ") + _filename; }
 
 protected:
 
+	struct play *_play = nullptr;
 	std::string _filename;
 	size_t _length = 0; // length in ms
 	size_t _offset = 0; // offset in ms
 };
 
-class Record {
+class Record : public AudioOp {
 
 public:
 
-	Record() {}
 	Record(const std::string& filename) : _filename(filename) {}
-	~Record() { stop(); }
+	virtual ~Record() { stop(); }
 
-	void stop() { _rec = (struct ausrc_st*)mem_deref(_rec); }
+	virtual int start(Molecule *);
+	virtual void stop() {_rec = (struct ausrc_st*)mem_deref(_rec); }
 
 	void set_filename(const std::string& filename) { _filename = filename; }
 	const std::string& filename() const { return _filename; }
@@ -68,28 +102,34 @@ public:
 	void set_max_silence(int max_silence) { _max_silence = max_silence; }
 	size_t max_silence() const { return _max_silence; }
 
-	size_t length() const { return _length; }
+	virtual size_t length() const { return _length; }
 
-	struct ausrc_st* _rec = nullptr;
+	virtual std::string desc() { return std::string("record ") + _filename; }
 
 protected:
 
+	ausrc_st *_rec;
 	std::string _filename;
 	int _max_silence = 1000;
 	size_t _length = 0;
 };
 
-class DTMF {
+class DTMF : public AudioOp {
 
 public:
 
-	DTMF() {}
 	DTMF(const std::string& dtmf) : _dtmf(dtmf) {}
+	virtual ~DTMF() { stop(); }
+
+	virtual int start(Molecule*);
+	virtual void stop() { _play = (struct play*)mem_deref(_play); }
 
 	char current() const { return _dtmf[_pos]; }
 	size_t operator++() { return  ++_pos; }
 	size_t size() const { return _dtmf.size(); }
 	void reset() { _pos = 0; }
+
+	virtual bool done() { return _pos >= size(); }
 
 	void set_dtmf(const std::string& dtmf) { _dtmf = dtmf; }
 	const std::string& dtmf() const { return _dtmf; }
@@ -97,49 +137,41 @@ public:
 	int inter_digit_delay() const { return _inter_digit_delay; }
 	void set_inter_digit_delay(int inter_digit_delay) { _inter_digit_delay = inter_digit_delay; }
 
-	void set_offset(size_t offset) {}
+	virtual size_t length() const { return _length; }
 
-	size_t length() const { return _length; }
-
-	struct play *_play = nullptr;
+	virtual std::string desc() { return std::string("DTMF ") + _dtmf; }
 
 protected:
 
+	struct play *_play;
 	std::string _dtmf;
-	std::string _lengths;
 	int _inter_digit_delay = 100;
 	size_t _pos = 0;
 	size_t _length = 0;
 };
 
-using Atom = std::variant<Play, Record, DTMF>;
-
-struct Session;
 struct Molecule {
 
-	Molecule(Session *session) : _session(session) { _current = _atoms.end(); }
+	Molecule(Session *session) : _session(session) {}
 
-	void push_back(const Atom &a) {
-		_atoms.push_back(a);
-		_current = begin();
-	}
+	void push_back(const AudioOpPtr &a) { _atoms.push_back(a); }
 
-	std::vector<Atom>::iterator begin() { return _atoms.begin(); }
-	std::vector<Atom>::iterator end() { return _atoms.end(); }
-
-	std::vector<Atom> _atoms;
-	size_t _time_started = 0;
-	size_t _time_stopped = 0;
-	size_t _position = 0;
-	std::vector<Atom>::iterator _current;
-	int _priority = 0;
-	mode _mode;
-	Session *_session;
+	AudioOpPtr &back() { return _atoms.back(); }
+	size_t size() { return _atoms.size(); }
 
 	size_t length(int start = 0, int end = -1) const;
 	void set_position(size_t position_ms);
 	// return a description of the Molecule
 	std::string desc() const;
+
+	std::vector<AudioOpPtr> _atoms;
+	size_t _current = 0;
+	size_t _time_started = 0;
+	size_t _time_stopped = 0;
+	size_t _position = 0;
+	int _priority = 0;
+	mode _mode;
+	Session *_session;
 };
 struct VQueue {
 
