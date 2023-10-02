@@ -63,10 +63,10 @@ class Play : public AudioOp {
 public:
 
 	Play(const std::string& filename) { set_filename(filename); };
-	virtual ~Play() { stop(); }
+	virtual ~Play() {}
 
 	virtual int start(Molecule *);
-	virtual void stop() { _play = (struct play*)mem_deref(_play); }
+	virtual void stop() { if (_audio) { audio_set_source(_audio, nullptr, nullptr); _audio = nullptr; } }
 
 	size_t set_filename(const std::string& filename);
 	const std::string& filename() const { return _filename; }
@@ -80,7 +80,7 @@ public:
 
 protected:
 
-	struct play *_play = nullptr;
+	struct audio *_audio = nullptr;
 	std::string _filename;
 	size_t _length = 0; // length in ms
 	size_t _offset = 0; // offset in ms

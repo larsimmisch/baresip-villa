@@ -161,6 +161,10 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 	struct ctrl_st *st = arg;
 	struct odict *od = NULL;
 
+	if (!st->jt) {
+		return;
+	}
+
 	int err = odict_alloc(&od, DICT_BSIZE);
 	if (err)
 		return;

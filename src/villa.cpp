@@ -182,13 +182,11 @@ std::vector<Molecule>::iterator VQueue::next() {
 
 int Play::start(Molecule *m) {
 
-	int err = play_file_ext(&_play, m->_session->_player, _filename.c_str(),
-		0, "auplay", "", offset());
+	int err = audio_set_source(call_audio(m->_session->_call), "aufile", _filename.c_str());
 
 	if (err) {
 		return err;
 	}
-	play_set_finish_handler(_play, play_stop_handler, m);
 	return err;
 }
 
@@ -448,7 +446,7 @@ extern "C" {
 				auto sit = Sessions.find(cid);
 				if (sit != Sessions.end()) {
 
-					DEBUG_INFO("villa: %s CALL_CLOSED\n", session->_id.c_str());
+					DEBUG_INFO("%s CALL_CLOSED\n", session->_id.c_str());
 
 					session->hangup(200, str);
 					Sessions.erase(sit);
@@ -456,13 +454,13 @@ extern "C" {
 				else {
 					auto cit = PendingCalls.find(cid);
 					if (cit != PendingCalls.end()) {
-						DEBUG_PRINTF("villa: %s CALL_CLOSED before accepted: %s\n",
+						DEBUG_PRINTF("%s CALL_CLOSED before accepted: %s\n",
 							session->_id.c_str(), str);
 						PendingCalls.erase(cit);
 						return;
 					}
 					else {
-						DEBUG_INFO("villa: %s CALL_CLOSED, but no session found\n",
+						DEBUG_INFO("%s CALL_CLOSED, but no session found\n",
 							session->_id.c_str());
 					}
 				}
@@ -472,14 +470,14 @@ extern "C" {
 			break;
 		}
 
-		DEBUG_PRINTF("villa: received call event: '%d'\n", ev);
+		DEBUG_PRINTF("received call event: '%d'\n", ev);
 	}
 
 	void villa_dtmf_handler(struct call *call, char key, void *arg)
 	{
 		Session *session = (Session*)arg;
 
-		DEBUG_PRINTF("villa: received DTMF event: key = '%c'\n", key ? key : '.');
+		DEBUG_PRINTF("received DTMF event: key = '%c'\n", key ? key : '.');
 
 		session->dtmf(key);
 	}
@@ -492,7 +490,7 @@ extern "C" {
 		case UA_EVENT_CALL_INCOMING:
 		{
 			std::string cid(call_id(call));
-			DEBUG_PRINTF("villa: CALL_INCOMING(%s): peer=%s --> local=%s\n",
+			DEBUG_PRINTF("CALL_INCOMING(%s): peer=%s --> local=%s\n",
 				cid.c_str(), call_peeruri(call), call_localuri(call));
 			PendingCalls.insert(std::make_pair(cid, call));
 		}
@@ -508,7 +506,7 @@ extern "C" {
 		const odict_entry *eo = odict_lookup(entry, "offset");
 		if (eo) {
 			if (odict_entry_type(eo) != ODICT_INT) {
-				DEBUG_PRINTF("villa: command enqueue: optional offset has invalid type");
+				DEBUG_PRINTF("command enqueue: optional offset has invalid type");
 				return 0;
 			}
 			offset = odict_entry_int(eo);
@@ -524,13 +522,13 @@ extern "C" {
 
 			struct le *le = parms->lst.head;
 			if (!le) {
-				DEBUG_PRINTF("villa: command listen without parameter");
+				DEBUG_PRINTF("command listen without parameter");
 				return nullptr;
 			}
 
 			const odict_entry *e = (const odict_entry*)le->data;
 			if (odict_entry_type(e) != ODICT_STRING) {
-				DEBUG_PRINTF("villa: command listen parameter invalid type");
+				DEBUG_PRINTF("command listen parameter invalid type");
 				return nullptr;
 			}
 
@@ -549,13 +547,13 @@ extern "C" {
 
 			struct le *le = parms->lst.head;
 			if (!le) {
-				DEBUG_PRINTF("villa: command accept without parameter");
+				DEBUG_PRINTF("command accept without parameter");
 				return nullptr;
 			}
 
 			const odict_entry *e = (const odict_entry*)le->data;
 			if (odict_entry_type(e) != ODICT_STRING) {
-				DEBUG_PRINTF("villa: command accept parameter invalid type");
+				DEBUG_PRINTF("command accept parameter invalid type");
 				return nullptr;
 			}
 
@@ -592,13 +590,13 @@ extern "C" {
 
 			struct le *le = parms->lst.head;
 			if (!le) {
-				DEBUG_PRINTF("villa: command hangup without parameter");
+				DEBUG_PRINTF("command hangup without parameter");
 				return nullptr;
 			}
 
 			const odict_entry *e = (const odict_entry*)le->data;
 			if (odict_entry_type(e) != ODICT_STRING) {
-				DEBUG_PRINTF("villa: command hangup parameter invalid type");
+				DEBUG_PRINTF("command hangup parameter invalid type");
 				return nullptr;
 			}
 
@@ -611,7 +609,7 @@ extern "C" {
 			if (le) {
 				const odict_entry *e = (const odict_entry*)le->data;
 				if (odict_entry_type(e) != ODICT_INT) {
-					DEBUG_PRINTF("villa: command hangup parameter 2 invalid type");
+					DEBUG_PRINTF("command hangup parameter 2 invalid type");
 					return nullptr;
 				}
 				scode = odict_entry_int(e);
@@ -620,7 +618,7 @@ extern "C" {
 				if (le) {
 					e = (const odict_entry*)le->data;
 					if (odict_entry_type(e) != ODICT_STRING) {
-						DEBUG_PRINTF("villa: command hangup parameter 3 invalid type");
+						DEBUG_PRINTF("command hangup parameter 3 invalid type");
 						return nullptr;
 					}
 					reason = odict_entry_str(e);
@@ -649,20 +647,20 @@ extern "C" {
 
 			struct le *le = parms->lst.head;
 			if (!le) {
-				DEBUG_PRINTF("villa: command enqueue: missing parameters");
+				DEBUG_PRINTF("command enqueue: missing parameters");
 				return nullptr;
 			}
 
 			const odict_entry *e = (const odict_entry*)le->data;
 			if (odict_entry_type(e) != ODICT_STRING) {
-				DEBUG_PRINTF("villa: command enqueue: parameter 1 (call_id) invalid type");
+				DEBUG_PRINTF("command enqueue: parameter 1 (call_id) invalid type");
 				return nullptr;
 			}
 
 			const char *call_id = odict_entry_str(e);
 			auto sit = Sessions.find(call_id);
 			if (sit == Sessions.end()) {
-				DEBUG_PRINTF("villa: command enqueue: session not found");
+				DEBUG_PRINTF("command enqueue: session not found");
 				return nullptr;
 			}
 
@@ -670,13 +668,13 @@ extern "C" {
 
 			le = le->next;
 			if (!le) {
-				DEBUG_PRINTF("villa: command enqueue: parameter 2 (priority) missing");
+				DEBUG_PRINTF("command enqueue: parameter 2 (priority) missing");
 				return nullptr;
 			}
 
 			e = (const odict_entry*)le->data;
 			if (odict_entry_type(e) != ODICT_INT) {
-				DEBUG_PRINTF("villa: command enqueue: parameter 2 (priority) invalid type");
+				DEBUG_PRINTF("command enqueue: parameter 2 (priority) invalid type");
 				return nullptr;
 			}
 
@@ -685,13 +683,13 @@ extern "C" {
 
 			le = le->next;
 			if (!le) {
-				DEBUG_PRINTF("villa: command enqueue: parameter 3 (mode) missing");
+				DEBUG_PRINTF("command enqueue: parameter 3 (mode) missing");
 				return nullptr;
 			}
 
 			e = (const odict_entry*)le->data;
 			if (odict_entry_type(e) != ODICT_INT) {
-				DEBUG_PRINTF("villa: command enqueue: parameter 3 (mode) invalid type");
+				DEBUG_PRINTF("command enqueue: parameter 3 (mode) invalid type");
 				return nullptr;
 			}
 
@@ -702,7 +700,7 @@ extern "C" {
 
 				e = (const odict_entry*)le->data;
 				if (odict_entry_type(e) != ODICT_OBJECT) {
-					DEBUG_PRINTF("villa: command enqueue: parameter %d (atom) invalid type", count);
+					DEBUG_PRINTF("command enqueue: parameter %d (atom) invalid type", count);
 					return nullptr;
 				}
 
@@ -712,7 +710,7 @@ extern "C" {
 				if (type == "play") {
 					const char* filename = odict_string(atom, "filename");
 					if (!filename) {
-						DEBUG_PRINTF("villa: command enqueue: parameter %d (atom) invalid type", count);
+						DEBUG_PRINTF("command enqueue: parameter %d (atom) invalid type", count);
 						return nullptr;
 					}
 
@@ -726,7 +724,7 @@ extern "C" {
 				else if (type == "record") {
 					const char* filename = odict_string(atom, "filename");
 					if (!filename) {
-						DEBUG_PRINTF("villa: command enqueue: parameter %d (atom) filename has invalid type", count);
+						DEBUG_PRINTF("command enqueue: parameter %d (atom) filename has invalid type", count);
 						return nullptr;
 					}
 
@@ -735,7 +733,7 @@ extern "C" {
 				else if (type == "dtmf") {
 					const char* digits = odict_string(atom, "digits");
 					if (!digits) {
-						DEBUG_PRINTF("villa: command enqueue: parameter %d (atom) digits has invalid type", count);
+						DEBUG_PRINTF("command enqueue: parameter %d (atom) digits has invalid type", count);
 						return nullptr;
 					}
 
