@@ -23,7 +23,6 @@ struct deleter {
 
 // Wrapping raw pointers
 
-using play_ptr = std::unique_ptr<struct play, deleter<struct play> >;
 using ausrc_st_ptr = std::unique_ptr<struct ausrc_st, deleter<struct ausrc_st> >;
 
 enum mode {
@@ -221,7 +220,6 @@ struct Session {
 	std::chrono::time_point<std::chrono::system_clock> _dtmf_start;
 	struct call *_call;
 	struct json_tcp *_jt;
-	struct player *_player = nullptr;
 	VQueue _queue;
 };
 

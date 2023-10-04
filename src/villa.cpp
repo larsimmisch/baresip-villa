@@ -14,9 +14,6 @@
 
 #include "villa.h"
 #include "json_tcp.h"
-#include "baresip/modules/aufile/aufile.h"
-
-void play_stop_handler(struct play *play, void *arg);
 
 //-------------------------------------------------------------------------
 
@@ -117,24 +114,18 @@ void Molecule::set_position(size_t position) {
 	size_t l = 0;
 	size_t l_prev = 0;
 
-	if (_mode & m_loop) {
-		position %= length();
-	}
-
-	for (int i = 0; i < _atoms.size(); i) {
+	for (size_t i = 0; i < _atoms.size(); ++i) {
 
 		AudioOpPtr a = _atoms[i];
 		l += a->length();
 
 		if (l >= position) {
-			if (_mode & m_mute) {
-				size_t offset = (position - l_prev);
+			size_t offset = (position - l_prev);
 
-				_current = i;
-				a->set_offset(offset);
+			_current = i;
+			a->set_offset(offset);
 
-				return;
-			}
+			return;
 		}
 
 		l_prev = l;
@@ -180,9 +171,21 @@ std::vector<Molecule>::iterator VQueue::next() {
 	return end();
 }
 
+static void play_stop_handler(int err, const char *str, void *arg) {
+
+	Molecule *m = (Molecule*)arg;
+
+	m->_session->_queue.schedule(m);
+}
+
 int Play::start(Molecule *m) {
 
-	int err = audio_set_source(call_audio(m->_session->_call), "aufile", _filename.c_str());
+	audio *audio = call_audio(m->_session->_call);
+
+	audio_remove_error_handler(audio, play_stop_handler);
+	audio_add_error_handler(audio, play_stop_handler, m);
+
+	int err = audio_set_source(audio, "aufile", _filename.c_str());
 
 	if (err) {
 		return err;
@@ -235,20 +238,13 @@ int DTMF::start(Molecule *m) {
 		filename += ".wav";
 	}
 
-	int err = play_file_ext(&_play, m->_session->_player, filename.c_str(), 0,
-			"aufile", "", 0);
-	if (err) {
-		return err;
-	}
 	++_pos;
-	play_set_finish_handler(_play, play_stop_handler, m);
 
-	return err;
+	return 0;
 }
 
 int VQueue::schedule(Molecule* stopped) {
 
-	struct config *cfg = conf_config();
 	size_t now = tmr_jiffies();
 
 	std::vector<Molecule>::iterator n = next();
@@ -266,57 +262,63 @@ int VQueue::schedule(Molecule* stopped) {
 		// Just remove Molecules with m_discard
 		if (stopped->_mode & m_discard) {
 			discard(stopped);
+			n = next();
 		}
 		else if (n != end() && stopped == &(*n)) {
 			// The current molecule was stopped
 			++n->_current;
+			n->_time_stopped = now;
 		}
 	}
 
-	if (n != end()) {
+	if (n == end()) {
+		return 0;
+	}
 
-		if (n->_mode & m_pause) {
-			n->set_position(n->_position);
-		}
-		else if (n->_time_stopped) {
+	if (n->_mode & m_pause) {
+		n->set_position(n->_position);
+	}
+	else {
+		if (n->_time_stopped) {
 			size_t pos = now - n->_time_stopped;
 
 			if (n->_mode & m_mute) {
 
 				if (pos >= n->length()) {
-					if (n->_mode & m_mute) {
-						discard(&(*n));
-						n = next();
-					}
-					else if (n->_mode & m_loop) {
-						pos = pos % n->length();
-					}
-
+					discard(&(*n));
+					n = next();
+				}
+				else if (n->_mode & m_loop) {
+					pos = pos % n->length();
 					n->set_position(pos);
 				}
 			}
 		}
-
-		if (n->_current < n->size()) {
-
-			AudioOpPtr &a = n->_atoms[n->_current];
-
-			int err = a->start(&*n);
-			if (err) {
-				DEBUG_PRINTF("%s failed: %s\n", a->desc().c_str(), strerror(err));
-				n->_atoms.erase(n->_atoms.begin() + n->_current);
-				n->_current++;
-				return err;
-			}
-			else {
-				DEBUG_INFO("%s started\n", a->desc().c_str());
+		else if (n->_mode & m_loop) {
+			if (n->_current >= n->size()) {
+				// rewind
+				n->set_position(0);
 			}
 		}
 	}
 
-	if (n != end()) {
-		n->_time_started = tmr_jiffies();
+	if (n->_current < n->size()) {
+
+		AudioOpPtr &a = n->_atoms[n->_current];
+
+		int err = a->start(&*n);
+		if (err) {
+			DEBUG_PRINTF("%s failed: %s\n", a->desc().c_str(), strerror(err));
+			n->_atoms.erase(n->_atoms.begin() + n->_current);
+			n->_current++;
+			return err;
+		}
+		else {
+			DEBUG_INFO("%s started\n", a->desc().c_str());
+		}
 	}
+
+	n->_time_started = tmr_jiffies();
 
 	return 0;
 }
@@ -339,9 +341,9 @@ int VQueue::enqueue(const Molecule& m) {
 }
 
 
-void play_stop_handler(struct play *play, void *arg) {
+void src_error_handler(int err, const char *str, void *arg) {
 
-	DEBUG_INFO("play file previous\n");
+	DEBUG_INFO("src_error_handler %s %d\n", str, err);
 	size_t now = tmr_jiffies();
 
 	Molecule* stopped = (Molecule*)arg;
@@ -404,8 +406,6 @@ void Session::hangup(int16_t scode, const char* reason) {
 
 		json_tcp_send(_jt, od);
 	}
-
-	_player = (struct player*)mem_deref(_player);
 }
 
 Session::~Session() {
@@ -475,6 +475,8 @@ extern "C" {
 
 	void villa_dtmf_handler(struct call *call, char key, void *arg)
 	{
+		(void)call;
+
 		Session *session = (Session*)arg;
 
 		DEBUG_PRINTF("received DTMF event: key = '%c'\n", key ? key : '.');
@@ -485,6 +487,10 @@ extern "C" {
 	void villa_event_handler(struct ua *ua, enum ua_event ev,
 		struct call *call, const char *prm, void *arg)
 	{
+		(void)ua;
+		(void)prm;
+		(void)arg;
+
 		switch (ev) {
 
 		case UA_EVENT_CALL_INCOMING:
@@ -569,17 +575,13 @@ extern "C" {
 			int err = call_answer(cit->second, 200, VIDMODE_OFF);
 
 			if (!err) {
+
 				// Create the session
 				const auto [it, _] = Sessions.insert(std::make_pair(cid, Session(call, jt)));
 
 				Session* session = &it->second;
 				call_set_handlers(call, villa_call_event_handler,
 		       		villa_dtmf_handler, session);
-
-				play_init(&session->_player);
-				play_set_path(session->_player, "/usr/local/share/baresip");
-
-				audio_set_devicename(call_audio(call), cid.c_str(), cid.c_str());
 			}
 
 			PendingCalls.erase(cit);
@@ -755,6 +757,9 @@ extern "C" {
 
 	int villa_status(struct re_printf *pf, void *arg)
 	{
+		(void)pf;
+		(void)arg;
+
 		return 0;
 	}
 }

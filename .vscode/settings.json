@@ -51,6 +51,8 @@
 		"system_error": "cpp",
 		"tuple": "cpp",
 		"typeinfo": "cpp",
-		"variant": "cpp"
+		"variant": "cpp",
+		"charconv": "cpp",
+		"algorithm": "cpp"
 	}
 }
