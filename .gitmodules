@@ -4,3 +4,6 @@
 [submodule "re"]
 	path = re
 	url = git@github.com:baresip/re.git
+[submodule "baresip-apps"]
+	path = baresip-apps
+	url = git@github.com:baresip/baresip-apps.git

@@ -41,7 +41,9 @@ struct Molecule;
 
 struct AudioOp {
 
-	virtual int start(Molecule *) = 0;
+	AudioOp(Session *session) : _session(session), _stopped(false) {}
+
+	virtual int start() = 0;
 	virtual void stop() = 0;
 
 	// length in ms
@@ -52,7 +54,12 @@ struct AudioOp {
 
 	virtual bool done() { return true; }
 
+	virtual void event_vad(Session*, bool) {}
+
 	virtual std::string desc() = 0;
+
+	Session *_session;
+	bool _stopped;
 };
 
 using AudioOpPtr = std::shared_ptr<AudioOp>;
@@ -61,12 +68,11 @@ class Play : public AudioOp {
 
 public:
 
-	Play(const std::string& filename) { set_filename(filename); };
+	Play(Session *session, const std::string& filename) : AudioOp(session) { set_filename(filename); };
 	virtual ~Play() {}
 
-	virtual int start(Molecule *);
-	virtual void stop() { if (_audio) { audio_set_source(_audio, nullptr, nullptr); _audio = nullptr; } }
-
+	virtual int start();
+	virtual void stop();
 	size_t set_filename(const std::string& filename);
 	const std::string& filename() const { return _filename; }
 
@@ -89,11 +95,17 @@ class Record : public AudioOp {
 
 public:
 
-	Record(const std::string& filename) : _filename(filename) {}
+	Record(Session *session, const std::string& filename, int max_silence=500, int max_length=120000)
+			: AudioOp(session), _filename(filename), _max_silence(max_silence), _max_length(max_length) {
+		tmr_init(&_tmr_max_length);
+		tmr_init(&_tmr_max_silence);
+	}
 	virtual ~Record() { stop(); }
 
-	virtual int start(Molecule *);
-	virtual void stop() {_rec = (struct ausrc_st*)mem_deref(_rec); }
+	virtual int start();
+	virtual void stop();
+
+	virtual void event_vad(Session *, bool vad);
 
 	void set_filename(const std::string& filename) { _filename = filename; }
 	const std::string& filename() const { return _filename; }
@@ -107,56 +119,25 @@ public:
 
 protected:
 
-	ausrc_st *_rec;
+	struct audio *_audio = nullptr;
+	size_t _last_vad_tstamp;
+	struct tmr _tmr_max_length;
+	struct tmr _tmr_max_silence;
 	std::string _filename;
-	int _max_silence = 1000;
+	int _max_silence;
+	int _max_length;
 	size_t _length = 0;
 };
 
-class DTMF : public AudioOp {
-
-public:
-
-	DTMF(const std::string& dtmf) : _dtmf(dtmf) {}
-	virtual ~DTMF() { stop(); }
-
-	virtual int start(Molecule*);
-	virtual void stop() { _play = (struct play*)mem_deref(_play); }
-
-	char current() const { return _dtmf[_pos]; }
-	size_t operator++() { return  ++_pos; }
-	size_t size() const { return _dtmf.size(); }
-	void reset() { _pos = 0; }
-
-	virtual bool done() { return _pos >= size(); }
-
-	void set_dtmf(const std::string& dtmf) { _dtmf = dtmf; }
-	const std::string& dtmf() const { return _dtmf; }
-
-	int inter_digit_delay() const { return _inter_digit_delay; }
-	void set_inter_digit_delay(int inter_digit_delay) { _inter_digit_delay = inter_digit_delay; }
-
-	virtual size_t length() const { return _length; }
-
-	virtual std::string desc() { return std::string("DTMF ") + _dtmf; }
-
-protected:
-
-	struct play *_play;
-	std::string _dtmf;
-	int _inter_digit_delay = 100;
-	size_t _pos = 0;
-	size_t _length = 0;
-};
 
 struct Molecule {
-
-	Molecule(Session *session) : _session(session) {}
 
 	void push_back(const AudioOpPtr &a) { _atoms.push_back(a); }
 
 	AudioOpPtr &back() { return _atoms.back(); }
-	size_t size() { return _atoms.size(); }
+	size_t size() const { return _atoms.size(); }
+
+	AudioOpPtr &current() { return _atoms[_current]; }
 
 	size_t length(int start = 0, int end = -1) const;
 	void set_position(size_t position_ms);
@@ -170,8 +151,9 @@ struct Molecule {
 	size_t _position = 0;
 	int _priority = 0;
 	mode _mode;
-	Session *_session;
+	std::string _id;
 };
+
 struct VQueue {
 
 	VQueue(Session *session = nullptr) : _session(session) {
@@ -182,11 +164,12 @@ struct VQueue {
 	std::vector<Molecule>::iterator next();
 	std::vector<Molecule>::iterator end() { return _molecules[0].end(); }
 
-	int schedule(Molecule* stopped);
+	int schedule();
 
 	int enqueue(const Molecule& m);
 
 	std::vector<std::vector<Molecule> > _molecules;
+	Molecule *_active = nullptr;
 	int _current_id;
 	Session *_session;
 };
@@ -214,6 +197,7 @@ struct Session {
 
 	virtual void dtmf(char key);
 	virtual void hangup(int16_t scode = 200, const char* reason = "BYE");
+	virtual void molecule_done(const Molecule &m) const;
 
 	std::string _id;
 	std::string _dtmf;
