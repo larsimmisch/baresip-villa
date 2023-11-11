@@ -91,12 +91,29 @@ protected:
 	size_t _offset = 0; // offset in ms
 };
 
+class Record;
+
+
+
 class Record : public AudioOp {
 
 public:
 
-	Record(Session *session, const std::string& filename, int max_silence=500, int max_length=120000)
-			: AudioOp(session), _filename(filename), _max_silence(max_silence), _max_length(max_length) {
+	enum timer_id_t {
+		timer_max_silence,
+		timer_max_length
+	};
+
+	struct TimerId {
+		TimerId (Record *r, timer_id_t t) : record(r), timer_id(t) {}
+
+		Record* record;
+		timer_id_t timer_id;
+	};
+
+	Record(Session *session, const std::string& filename, int max_silence=1000, int max_length=120000)
+			: AudioOp(session), _filename(filename), _max_silence(max_silence), _max_length(max_length),
+			timer_max_silence_id(this, timer_max_silence), timer_max_length_id(this, timer_max_length) {
 		tmr_init(&_tmr_max_length);
 		tmr_init(&_tmr_max_silence);
 	}
@@ -127,6 +144,8 @@ protected:
 	int _max_silence;
 	int _max_length;
 	size_t _length = 0;
+	TimerId timer_max_silence_id;
+	TimerId timer_max_length_id;
 };
 
 

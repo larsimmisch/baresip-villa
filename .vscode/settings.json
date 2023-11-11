@@ -54,5 +54,11 @@
 		"variant": "cpp",
 		"charconv": "cpp",
 		"algorithm": "cpp"
-	}
+	},
+	"editor.insertSpaces": false,
+	"[python]": {
+		"editor.detectIndentation" : false,
+		"editor.insertSpaces": false,
+		"editor.tabSize": 4
+	  }
 }

@@ -223,9 +223,16 @@ void Play::stop()
 
 
 void record_timer(void *arg) {
-	Record *r = (Record*)arg;
 
-	r->stop();
+	Record::TimerId *timer = (Record::TimerId*)arg;
+
+	DEBUG_PRINTF("%s recording %s stopped. Reason: %s\n",
+		timer->record->_session->_id.c_str(),
+		timer->record->filename().c_str(),
+		timer->timer_id == Record::timer_max_silence ? "max silence" : "max length");
+
+	timer->record->stop();
+	timer->record->_session->_queue.schedule();
 }
 
 int Record::start() {
@@ -239,8 +246,8 @@ int Record::start() {
 		return err;
 	}
 
-	tmr_start(&_tmr_max_length, _max_length, record_timer, this);
-	tmr_start(&_tmr_max_silence, _max_silence, record_timer, this);
+	tmr_start(&_tmr_max_length, _max_length, record_timer, &timer_max_length_id);
+	tmr_start(&_tmr_max_silence, _max_silence, record_timer, &timer_max_silence_id);
 
 	return err;
 }
@@ -261,7 +268,7 @@ void Record::stop() {
 
 void Record::event_vad(Session*, bool vad) {
 	if (vad) {
-		tmr_continue(&_tmr_max_silence, _max_silence, record_timer, this);
+		tmr_continue(&_tmr_max_silence, _max_silence, record_timer, &timer_max_silence_id);
 	}
 }
 
@@ -281,9 +288,15 @@ int VQueue::schedule() {
 			n = next();
 		}
 		else if (n != end() && _active == &(*n)) {
-			// The current molecule was stopped
+			// The current molecule was stopped or a job completed
 			++n->_current;
-			n->_time_stopped = now;
+			if (n->_current >= n->_atoms.size()) {
+				n->_time_stopped = now;
+			}
+			else {
+				n->current()->start();
+				return 0;
+			}
 		}
 	}
 
@@ -355,24 +368,6 @@ int VQueue::enqueue(const Molecule& m) {
 		a->stop();
 	}
 	return schedule();
-}
-
-
-void src_error_handler(int err, const char *str, void *arg) {
-
-	DEBUG_INFO("src_error_handler %s %d\n", str, err);
-	size_t now = tmr_jiffies();
-
-	Molecule* stopped = (Molecule*)arg;
-	assert(stopped);
-
-	stopped->_time_stopped = now;
-	stopped->_position = now - stopped->_time_started;
-
-	assert(stopped->current()->_session);
-	VQueue &queue = stopped->current()->_session->_queue;
-
-	queue.schedule();
 }
 
 Session::Session(struct call *call, struct json_tcp *jt) : _call(call), _jt(jt), _queue(this) {
@@ -485,7 +480,7 @@ extern "C" {
 				else {
 					auto cit = PendingCalls.find(cid);
 					if (cit != PendingCalls.end()) {
-						DEBUG_PRINTF("%s CALL_CLOSED before accepted: %s\n",
+						warning("%s CALL_CLOSED before accepted: %s\n",
 							session->_id.c_str(), str);
 						PendingCalls.erase(cit);
 						return;
@@ -510,7 +505,7 @@ extern "C" {
 
 		Session *session = (Session*)arg;
 
-		DEBUG_PRINTF("received DTMF event: key = '%c'\n", key ? key : '.');
+		DEBUG_PRINTF("%s received DTMF event: key = '%c'\n", session->_id.c_str(), key ? key : '.');
 
 		session->dtmf(key);
 	}
@@ -540,7 +535,7 @@ extern "C" {
 
 			auto session = Sessions.find(cid);
 			if (session == Sessions.end()) {
-				DEBUG_PRINTF("%s END_OF_FILE: no session found\n", cid.c_str());
+				warning("%s END_OF_FILE: no session found\n", cid.c_str());
 				return;
 			}
 
@@ -573,7 +568,7 @@ extern "C" {
     		}
 
 			if (elems.size() >= 3) {
-				if (elems[0] == "fvad" && elems[1] == "vad") {
+				if (elems[0] == "fvad" && elems[1] == "vad_rx") {
 					bool vad = elems[2] == "on";
 
 					Molecule *active = session->second._queue._active;
@@ -582,10 +577,13 @@ extern "C" {
 					}
 				}
 			}
+			else {
+				warning("unknown event format '%s\n", prm);
+			}
 			break;
 		}
 		default:
-			DEBUG_PRINTF("unhandled event %s\n", uag_event_str(ev));
+			warning("unhandled event %s\n", uag_event_str(ev));
 			break;
 		}
 	}
@@ -596,7 +594,7 @@ extern "C" {
 		const odict_entry *eo = odict_lookup(entry, "offset");
 		if (eo) {
 			if (odict_entry_type(eo) != ODICT_INT) {
-				DEBUG_PRINTF("command enqueue: optional offset has invalid type");
+				warning("command enqueue: optional offset has invalid type");
 				return 0;
 			}
 			offset = odict_entry_int(eo);
@@ -612,13 +610,13 @@ extern "C" {
 
 			struct le *le = parms->lst.head;
 			if (!le) {
-				DEBUG_PRINTF("command listen without parameter");
+				warning("command listen without parameter");
 				return nullptr;
 			}
 
 			const odict_entry *e = (const odict_entry*)le->data;
 			if (odict_entry_type(e) != ODICT_STRING) {
-				DEBUG_PRINTF("command listen parameter invalid type");
+				warning("command listen parameter invalid type");
 				return nullptr;
 			}
 
@@ -637,13 +635,13 @@ extern "C" {
 
 			struct le *le = parms->lst.head;
 			if (!le) {
-				DEBUG_PRINTF("command accept without parameter");
+				warning("command accept without parameter");
 				return nullptr;
 			}
 
 			const odict_entry *e = (const odict_entry*)le->data;
 			if (odict_entry_type(e) != ODICT_STRING) {
-				DEBUG_PRINTF("command accept parameter invalid type");
+				warning("command accept parameter invalid type");
 				return nullptr;
 			}
 
@@ -676,13 +674,13 @@ extern "C" {
 
 			struct le *le = parms->lst.head;
 			if (!le) {
-				DEBUG_PRINTF("command hangup without parameter\n");
+				warning("command hangup without parameter\n");
 				return nullptr;
 			}
 
 			const odict_entry *e = (const odict_entry*)le->data;
 			if (odict_entry_type(e) != ODICT_STRING) {
-				DEBUG_PRINTF("command hangup parameter invalid type\n");
+				warning("command hangup parameter invalid type\n");
 				return nullptr;
 			}
 
@@ -695,7 +693,7 @@ extern "C" {
 			if (le) {
 				const odict_entry *e = (const odict_entry*)le->data;
 				if (odict_entry_type(e) != ODICT_INT) {
-					DEBUG_PRINTF("command hangup parameter 2 invalid type\n");
+					warning("command hangup parameter 2 invalid type\n");
 					return nullptr;
 				}
 				scode = odict_entry_int(e);
@@ -704,7 +702,7 @@ extern "C" {
 				if (le) {
 					e = (const odict_entry*)le->data;
 					if (odict_entry_type(e) != ODICT_STRING) {
-						DEBUG_PRINTF("command hangup parameter 3 invalid type\n");
+						warning("command hangup parameter 3 invalid type\n");
 						return nullptr;
 					}
 					reason = odict_entry_str(e);
@@ -733,20 +731,20 @@ extern "C" {
 
 			struct le *le = parms->lst.head;
 			if (!le) {
-				DEBUG_PRINTF("command enqueue: missing parameters\n");
+				warning("command enqueue: missing parameters\n");
 				return nullptr;
 			}
 
 			const odict_entry *e = (const odict_entry*)le->data;
 			if (odict_entry_type(e) != ODICT_STRING) {
-				DEBUG_PRINTF("command enqueue: parameter 1 (call_id) invalid type\n");
+				warning("command enqueue: parameter 1 (call_id) invalid type\n");
 				return nullptr;
 			}
 
 			const char *call_id = odict_entry_str(e);
 			auto sit = Sessions.find(call_id);
 			if (sit == Sessions.end()) {
-				DEBUG_PRINTF("command enqueue: session %s not found\n", call_id);
+				warning("command enqueue: session %s not found\n", call_id);
 				return nullptr;
 			}
 
@@ -754,13 +752,13 @@ extern "C" {
 
 			le = le->next;
 			if (!le) {
-				DEBUG_PRINTF("command enqueue: parameter 2 (priority) missing\n");
+				warning("command enqueue: parameter 2 (priority) missing\n");
 				return nullptr;
 			}
 
 			e = (const odict_entry*)le->data;
 			if (odict_entry_type(e) != ODICT_INT) {
-				DEBUG_PRINTF("command enqueue: parameter 2 (priority) invalid type\n");
+				warning("command enqueue: parameter 2 (priority) invalid type\n");
 				return nullptr;
 			}
 
@@ -769,13 +767,13 @@ extern "C" {
 
 			le = le->next;
 			if (!le) {
-				DEBUG_PRINTF("command enqueue: parameter 3 (mode) missing\n");
+				warning("command enqueue: parameter 3 (mode) missing\n");
 				return nullptr;
 			}
 
 			e = (const odict_entry*)le->data;
 			if (odict_entry_type(e) != ODICT_INT) {
-				DEBUG_PRINTF("command enqueue: parameter 3 (mode) invalid type\n");
+				warning("command enqueue: parameter 3 (mode) invalid type\n");
 				return nullptr;
 			}
 
@@ -793,7 +791,7 @@ extern "C" {
 						continue;
 					}
 
-					DEBUG_PRINTF("command enqueue: parameter %d (atom) invalid type\n", count);
+					warning("command enqueue: parameter %d (atom) invalid type\n", count);
 					return nullptr;
 				}
 
@@ -803,7 +801,7 @@ extern "C" {
 				if (type == "play") {
 					const char* filename = odict_string(atom, "filename");
 					if (!filename) {
-						DEBUG_PRINTF("command enqueue: parameter %d (atom) missing filename\n", count);
+						warning("command enqueue: parameter %d (atom) missing filename\n", count);
 						return nullptr;
 					}
 
@@ -817,11 +815,11 @@ extern "C" {
 				else if (type == "record") {
 					const char* filename = odict_string(atom, "filename");
 					if (!filename) {
-						DEBUG_PRINTF("command enqueue: parameter %d (atom) missing filename", count);
+						warning("command enqueue: parameter %d (atom) missing filename", count);
 						return nullptr;
 					}
 
-					uint64_t max_silence = 500;
+					uint64_t max_silence = 1000;
 					odict_get_number(atom, &max_silence, "max_silence");
 
 					uint64_t max_length = 120000;
