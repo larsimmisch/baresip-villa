@@ -12,6 +12,7 @@
 #include <re.h>
 #include <baresip.h>
 #include <re_dbg.h>
+#include <stdexcept>
 
 #include "villa.h"
 #include "json_tcp.h"
@@ -170,6 +171,15 @@ std::string Molecule::desc() const {
 	return desc;
 }
 
+AudioOpPtr &Molecule::current() {
+
+	if (_current >= _atoms.size()) {
+		throw std::out_of_range("no current atom");
+	}
+
+	return _atoms[_current];
+}
+
 // @pragma mark VQueue
 
 void VQueue::discard(Molecule* m) {
@@ -246,8 +256,13 @@ int Record::start() {
 		return err;
 	}
 
-	tmr_start(&_tmr_max_length, _max_length, record_timer, &timer_max_length_id);
-	tmr_start(&_tmr_max_silence, _max_silence, record_timer, &timer_max_silence_id);
+	if (_max_length > 0) {
+		tmr_start(&_tmr_max_length, _max_length, record_timer, &_timer_max_length_id);
+	}
+
+	if (_max_silence > 0) {
+		tmr_start(&_tmr_max_silence, _max_silence, record_timer, &_timer_max_silence_id);
+	}
 
 	return err;
 }
@@ -267,10 +282,21 @@ void Record::stop() {
 }
 
 void Record::event_vad(Session*, bool vad) {
-	if (vad) {
-		tmr_continue(&_tmr_max_silence, _max_silence, record_timer, &timer_max_silence_id);
+	if (vad && _max_silence > 0) {
+		tmr_continue(&_tmr_max_silence, _max_silence, record_timer, &_timer_max_silence_id);
 	}
 }
+
+void Record::event_dtmf(Session *session, char, bool end)
+{
+	if (!end && _dtmf_stop) {
+		DEBUG_PRINTF("%s recording %s stopped. Reason: dtmf\n", session->_id.c_str(), _filename.c_str());
+
+		stop();
+		session->_queue.schedule();
+	}
+}
+
 
 int VQueue::schedule() {
 
@@ -290,7 +316,7 @@ int VQueue::schedule() {
 		else if (n != end() && _active == &(*n)) {
 			// The current molecule was stopped or a job completed
 			++n->_current;
-			if (n->_current >= n->_atoms.size()) {
+			if (!n->is_active()) {
 				n->_time_stopped = now;
 			}
 			else {
@@ -331,7 +357,7 @@ int VQueue::schedule() {
 		}
 	}
 
-	if (n->_current < n->size()) {
+	if (n->is_active()) {
 
 		AudioOpPtr &a = n->current();
 
@@ -355,18 +381,7 @@ int VQueue::schedule() {
 
 int VQueue::enqueue(const Molecule& m) {
 
-	auto stopped = next();
-	if (stopped == end()) {
-		_molecules[m._priority].push_back(m);
-		return schedule();
-	}
-
 	_molecules[m._priority].push_back(m);
-
-	if (stopped->_current >= stopped->size()) {
-		AudioOpPtr &a = stopped->current();
-		a->stop();
-	}
 	return schedule();
 }
 
@@ -395,6 +410,20 @@ void Session::dtmf(char key) {
 
 	odict_entry_add(od, "event", ODICT_BOOL, true);
 
+	if (key != '\x04') {
+		char k[2] = { key, 0 };
+		_dtmf = k;
+		odict_entry_add(od, "type", ODICT_STRING, "dtmf_begin");
+		odict_entry_add(od, "key", ODICT_STRING, _dtmf.c_str());
+
+		_dtmf_start = std::chrono::system_clock::now();
+	}
+
+	Molecule *active = _queue._active;
+	if (active && active->is_active()) {
+		active->current()->event_dtmf(this,_dtmf[0], key == '\x04');
+	}
+
 	if (key == '\x04') { // end-of-transmission
 		auto now = std::chrono::system_clock::now();
 
@@ -403,15 +432,6 @@ void Session::dtmf(char key) {
 		odict_entry_add(od, "key", ODICT_STRING, _dtmf.c_str());
 		odict_entry_add(od, "duration", ODICT_INT, duration);
 		_dtmf.erase();
-
-	}
-	else {
-		char k[2] = { key, 0 };
-		_dtmf = k;
-		odict_entry_add(od, "type", ODICT_STRING, "dtmf_begin");
-		odict_entry_add(od, "key", ODICT_STRING, _dtmf.c_str());
-
-		_dtmf_start = std::chrono::system_clock::now();
 	}
 
 	json_tcp_send(_jt, od);
@@ -572,7 +592,7 @@ extern "C" {
 					bool vad = elems[2] == "on";
 
 					Molecule *active = session->second._queue._active;
-					if (active) {
+					if (active && active->is_active()) {
 						active->current()->event_vad(&session->second, vad);
 					}
 				}
@@ -825,7 +845,10 @@ extern "C" {
 					uint64_t max_length = 120000;
 					odict_get_number(atom, &max_length, "max_length");
 
-					m.push_back(std::make_shared<Record>(&session, filename, max_silence, max_length));
+					bool dtmf_stop = false;
+					odict_get_boolean(atom, &dtmf_stop, "dtmf_stop");
+
+					m.push_back(std::make_shared<Record>(&session, filename, max_silence, max_length, dtmf_stop));
 				}
 			}
 

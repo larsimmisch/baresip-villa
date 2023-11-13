@@ -55,6 +55,7 @@ struct AudioOp {
 	virtual bool done() { return true; }
 
 	virtual void event_vad(Session*, bool) {}
+	virtual void event_dtmf(Session*, char, bool) {}
 
 	virtual std::string desc() = 0;
 
@@ -111,9 +112,11 @@ public:
 		timer_id_t timer_id;
 	};
 
-	Record(Session *session, const std::string& filename, int max_silence=1000, int max_length=120000)
-			: AudioOp(session), _filename(filename), _max_silence(max_silence), _max_length(max_length),
-			timer_max_silence_id(this, timer_max_silence), timer_max_length_id(this, timer_max_length) {
+	Record(Session *session, const std::string& filename, int max_silence=1000,
+		int max_length=120000, bool dtmf_stop=false)
+			: AudioOp(session), _filename(filename), _max_silence(max_silence),
+			_max_length(max_length), _dtmf_stop(dtmf_stop),
+			_timer_max_silence_id(this, timer_max_silence), _timer_max_length_id(this, timer_max_length) {
 		tmr_init(&_tmr_max_length);
 		tmr_init(&_tmr_max_silence);
 	}
@@ -123,6 +126,7 @@ public:
 	virtual void stop();
 
 	virtual void event_vad(Session *, bool vad);
+	virtual void event_dtmf(Session*, char, bool);
 
 	void set_filename(const std::string& filename) { _filename = filename; }
 	const std::string& filename() const { return _filename; }
@@ -144,8 +148,9 @@ protected:
 	int _max_silence;
 	int _max_length;
 	size_t _length = 0;
-	TimerId timer_max_silence_id;
-	TimerId timer_max_length_id;
+	bool _dtmf_stop;
+	TimerId _timer_max_silence_id;
+	TimerId _timer_max_length_id;
 };
 
 
@@ -155,8 +160,8 @@ struct Molecule {
 
 	AudioOpPtr &back() { return _atoms.back(); }
 	size_t size() const { return _atoms.size(); }
-
-	AudioOpPtr &current() { return _atoms[_current]; }
+	AudioOpPtr &current();
+	bool is_active() const { return _current < size(); }
 
 	size_t length(int start = 0, int end = -1) const;
 	void set_position(size_t position_ms);

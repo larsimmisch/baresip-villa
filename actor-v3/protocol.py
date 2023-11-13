@@ -29,7 +29,7 @@ class Caller(object):
 
 		self.send_command('enqueue', pr_background, mode_loop,
 						  { 'type': 'play', 'filename': '/usr/local/share/baresip/villa/Villa/beep_s16.wav'},
-						  { 'type': 'record', 'filename': 'record.wav', 'max_silence': 500},
+						  { 'type': 'record', 'filename': 'record.wav', 'max_silence': -1, 'dtmf_stop': True },
 						  { 'type': 'play', 'filename': 'record.wav' })
 
 class VillaProtocol(asyncio.Protocol):
@@ -505,7 +505,7 @@ async def main():
 		except ConnectionRefusedError as e:
 			if transport:
 				transport.close()
-			logging.info(f'connection refused, retrying after {timeout}')
+			logging.info(f'connection refused, retrying after {timeout}s')
 			await asyncio.sleep(timeout)
 			if timeout < 2.0:
 				timeout = timeout * 2
