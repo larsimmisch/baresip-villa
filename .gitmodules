@@ -7,3 +7,6 @@
 [submodule "baresip-apps"]
 	path = baresip-apps
 	url = git@github.com:baresip/baresip-apps.git
+[submodule "libfvad"]
+	path = libfvad
+	url = git@github.com:dpirch/libfvad.git
