@@ -180,6 +180,13 @@ struct Molecule {
 
 struct VQueue {
 
+	enum reason {
+		sched_start,
+		sched_interrupt,
+		sched_dtmf,
+		sched_end_of_file
+	};
+
 	VQueue(Session *session = nullptr) : _session(session) {
 		_molecules.resize(max_priority + 1);
 	}
@@ -188,7 +195,7 @@ struct VQueue {
 	std::vector<Molecule>::iterator next();
 	std::vector<Molecule>::iterator end() { return _molecules[0].end(); }
 
-	int schedule();
+	int schedule(reason);
 
 	int enqueue(const Molecule& m);
 

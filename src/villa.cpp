@@ -214,7 +214,7 @@ int Play::start() {
 	_audio = call_audio(_session->_call);
 	_stopped = false;
 
-	int err = audio_set_source(_audio, "aufile", _filename.c_str()); //audio_set_source_offset(audio, "aufile", _filename.c_str(), _offset);
+	int err = audio_set_source_offset(_audio, "aufile", _filename.c_str(), _offset);
 	if (err) {
 		_audio = nullptr;
 	}
@@ -242,7 +242,7 @@ void record_timer(void *arg) {
 		timer->timer_id == Record::timer_max_silence ? "max silence" : "max length");
 
 	timer->record->stop();
-	timer->record->_session->_queue.schedule();
+	timer->record->_session->_queue.schedule(VQueue::sched_end_of_file);
 }
 
 int Record::start() {
@@ -293,16 +293,16 @@ void Record::event_dtmf(Session *session, char, bool end)
 		DEBUG_PRINTF("%s recording %s stopped. Reason: dtmf\n", session->_id.c_str(), _filename.c_str());
 
 		stop();
-		session->_queue.schedule();
+		session->_queue.schedule(VQueue::sched_end_of_file);
 	}
 }
 
 
-int VQueue::schedule() {
+int VQueue::schedule(reason r) {
 
 	size_t now = tmr_jiffies();
 
-	std::vector<Molecule>::iterator n = next();
+	auto n = next();
 
 	if (_active) {
 
@@ -373,6 +373,11 @@ int VQueue::schedule() {
 			DEBUG_INFO("%s started\n", a->desc().c_str());
 		}
 	}
+	else {
+		if (r == sched_end_of_file) {
+			_molecules[n->_priority].erase(n);
+		}
+	}
 
 	n->_time_started = tmr_jiffies();
 
@@ -382,7 +387,12 @@ int VQueue::schedule() {
 int VQueue::enqueue(const Molecule& m) {
 
 	_molecules[m._priority].push_back(m);
-	return schedule();
+	auto n = next();
+	assert(n != end());
+
+	if (_active && _active->_priority < m._priority) {
+		return schedule(sched_interrupt);
+	}
 }
 
 Session::Session(struct call *call, struct json_tcp *jt) : _call(call), _jt(jt), _queue(this) {
@@ -409,6 +419,7 @@ void Session::dtmf(char key) {
 	odict_alloc(&od, DICT_BSIZE);
 
 	odict_entry_add(od, "event", ODICT_BOOL, true);
+	odict_entry_add(od, "id", ODICT_STRING, _id.c_str());
 
 	if (key != '\x04') {
 		char k[2] = { key, 0 };
@@ -533,8 +544,9 @@ extern "C" {
 	void villa_event_handler(struct ua *ua, enum ua_event ev,
 		struct call *call, const char *prm, void *arg)
 	{
+		struct json_tcp *jt = (json_tcp*)arg;
 		(void)ua;
-		(void)arg;
+		bool send_event = false;
 
 		switch (ev) {
 
@@ -544,6 +556,7 @@ extern "C" {
 			DEBUG_PRINTF("%s: CALL_INCOMING: peer=%s --> local=%s\n",
 				cid.c_str(), call_peeruri(call), call_localuri(call));
 			PendingCalls.insert(std::make_pair(cid, call));
+			send_event = true;
 			break;
 		}
 		case UA_EVENT_END_OF_FILE:
@@ -559,13 +572,17 @@ extern "C" {
 				return;
 			}
 
-			assert(session->second._queue._active);
+			if (session->second._queue._active) {
+				Molecule *stopped = session->second._queue._active;
+				stopped->_time_stopped = now;
+				stopped->_position = now - stopped->_time_started;
 
-			Molecule *stopped = session->second._queue._active;
-			stopped->_time_stopped = now;
-			stopped->_position = now - stopped->_time_started;
+				session->second._queue.schedule(VQueue::sched_end_of_file);
+			}
+			else {
+				warning("villa: no molecule active, but UA_EVENT_END_OF_FILE received");
+			}
 
-			session->second._queue.schedule();
 			break;
 		}
 		case UA_EVENT_MODULE:
@@ -605,6 +622,24 @@ extern "C" {
 		default:
 			warning("unhandled event %s\n", uag_event_str(ev));
 			break;
+		}
+
+		if (send_event) {
+
+			struct odict *od = NULL;
+
+			int err = odict_alloc(&od, DICT_BSIZE);
+			if (err)
+				return;
+
+			err = odict_entry_add(od, "event", ODICT_BOOL, true);
+			err |= event_encode_dict(od, ua, ev, call, prm);
+			if (err) {
+				DEBUG_WARNING("villa: failed to encode event (%m)\n", err);
+				return;
+			}
+
+			json_tcp_send(jt, od);
 		}
 	}
 

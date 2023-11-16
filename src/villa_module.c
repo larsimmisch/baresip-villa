@@ -159,26 +159,12 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 			     struct call *call, const char *prm, void *arg)
 {
 	struct ctrl_st *st = arg;
-	struct odict *od = NULL;
 
 	if (!st->jt) {
 		return;
 	}
 
-	int err = odict_alloc(&od, DICT_BSIZE);
-	if (err)
-		return;
-
-	villa_event_handler(ua, ev, call, prm, arg);
-
-	err = odict_entry_add(od, "event", ODICT_BOOL, true);
-	err |= event_encode_dict(od, ua, ev, call, prm);
-	if (err) {
-		DEBUG_WARNING("villa: failed to encode event (%m)\n", err);
-		return;
-	}
-
-	json_tcp_send(st->jt, od);
+	villa_event_handler(ua, ev, call, prm, st->jt);
 }
 
 
