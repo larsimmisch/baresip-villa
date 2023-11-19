@@ -502,7 +502,7 @@ odict *create_response(const char* type, const char* token, int result)
 
 extern "C" {
 
-	void json_tcp_disconnected()
+	void villa_tcp_disconnected()
 	{
 		// Lost connection to world, hangup all calls
 		for (auto &[id, session] : Sessions) {

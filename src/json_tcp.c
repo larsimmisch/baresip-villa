@@ -22,7 +22,6 @@ struct json_tcp {
 	void *arg;
 
 	json_tcp_frame_h *frameh;
-	json_disconnected_h *disconnectedh;
 	uint64_t n_tx;
 	uint64_t n_rx;
 };
@@ -89,10 +88,6 @@ static void destructor(void *arg)
 {
 	struct json_tcp *jt = arg;
 
-	if (jt->disconnectedh) {
-		jt->disconnectedh(jt);
-	}
-
 	mem_deref(jt->th);
 	mem_deref(jt->tc);
 	mem_deref(jt->rcvbuf);
@@ -143,8 +138,9 @@ static struct odict *json_tcp_hello(void)
 	return od;
 }
 
+
 int json_tcp_insert(struct json_tcp **jtp, struct tcp_conn *tc,
-		int layer, json_tcp_frame_h *frameh, json_disconnected_h disconnectedh, void *arg)
+		int layer, json_tcp_frame_h *frameh, void *arg)
 {
 	struct json_tcp *jt;
 	int err;
@@ -163,7 +159,6 @@ int json_tcp_insert(struct json_tcp **jtp, struct tcp_conn *tc,
 		goto out;
 
 	jt->frameh = frameh;
-	jt->disconnectedh = disconnectedh;
 	jt->arg = arg;
 	jt->rcvbuf = NULL;
 

@@ -13,7 +13,7 @@
 
 #include "json_tcp.h"
 
-extern void json_tcp_disconnected();
+extern void villa_tcp_disconnected();
 
 extern void villa_event_handler(struct ua *ua, enum ua_event ev,
 	struct call *call, const char *prm, void *arg);
@@ -133,7 +133,7 @@ static void tcp_close_handler(int err, void *arg)
 
 	(void)err;
 
-	// TODO: send connection closed to module
+	villa_tcp_disconnected();
 
 	if (st->tc)
 		st->tc = mem_deref(st->tc);
@@ -151,7 +151,7 @@ static void tcp_conn_handler(const struct sa *peer, void *arg)
 	st->jt = mem_deref(st->jt);
 
 	(void)tcp_accept(&st->tc, st->ts, NULL, NULL, tcp_close_handler, st);
-	(void)json_tcp_insert(&st->jt, st->tc, 0, command_handler, json_tcp_disconnected, st);
+	(void)json_tcp_insert(&st->jt, st->tc, 0, command_handler, st);
 }
 
 

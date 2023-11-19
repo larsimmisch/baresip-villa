@@ -12,7 +12,6 @@ enum {
 struct json_tcp;
 
 typedef bool (json_tcp_frame_h)(const struct odict *od, int *errp, void *arg);
-typedef void (json_disconnected_h)(struct json_tcp *arg);
 
 #ifdef __cplusplus
 extern "C" {
@@ -22,7 +21,7 @@ extern "C" {
 int json_tcp_send(struct json_tcp *json_tcp, struct odict *od);
 
 int json_tcp_insert(struct json_tcp **json_tcpp, struct tcp_conn *tc,
-		int layer, json_tcp_frame_h *frameh, json_disconnected_h *disconnectedh, void *arg);
+		int layer, json_tcp_frame_h *frameh, void *arg);
 
 #ifdef __cplusplus
 }
