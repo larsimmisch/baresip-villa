@@ -87,14 +87,6 @@ std::string mode_string(mode m) {
 	return modestr;
 }
 
-bool is_atom_start(const std::string &token) {
-	if (token[0] == 'p' || token[0] == 'r' || token[0] == 'd') {
-		return true;
-	}
-
-	return false;
-}
-
 size_t Play::set_filename(const std::string& filename) {
 
 	struct aufile* au;
@@ -126,8 +118,11 @@ size_t Play::set_filename(const std::string& filename) {
 size_t Molecule::length(int start, int end) const {
 	size_t l = 0;
 
-	if (end <= 0) {
-		end = _atoms.size() - end;
+	if (end < 0) {
+		end = _atoms.size() + end + 1;
+	}
+	else {
+		end = std::max(end, (int)_atoms.size());
 	}
 
 	for (int i = start; i < end; ++i) {
@@ -231,6 +226,22 @@ void Play::stop()
 	}
 }
 
+size_t Play::length() const
+{
+	if (_length) {
+		return _length;
+	}
+
+	struct aufile *f;
+	struct aufile_prm p;
+
+	int err = aufile_open(&f, &p, _filename.c_str(), AUFILE_READ);
+	if (err < 0) {
+		return 0;
+	}
+
+	return aufile_get_length(f, &p);
+}
 
 void record_timer(void *arg) {
 
@@ -302,97 +313,96 @@ int VQueue::schedule(reason r) {
 
 	size_t now = tmr_jiffies();
 
-	auto n = next();
-
-	if (_active) {
-
-		// Just remove Molecules with m_discard
-		if (_active->_mode & m_discard && _active != &*n) {
-			discard(_active);
-			_session->molecule_done(*_active);
-			_active = nullptr;
-			n = next();
-		}
-		else if (n != end() && _active == &(*n)) {
-			// The current molecule was stopped or a job completed
-			++n->_current;
-			if (!n->is_active()) {
-				n->_time_stopped = now;
-			}
-			else {
-				n->current()->start();
-				return 0;
-			}
-		}
-	}
-
-	if (n == end()) {
+	auto current = next();
+	if (current == end()) {
+		_active = nullptr;
 		return 0;
 	}
 
-	if (n->_mode & m_pause) {
-		n->set_position(n->_position);
-	}
-	else {
-		if (n->_time_stopped) {
-			size_t pos = now - n->_time_stopped;
+	if (_active) {
 
-			if (n->_mode & m_mute) {
+		// Just remove Molecules with m_discard that are interrupted
+		if (_active->_mode & m_discard && _active != &*current) {
+			_active = nullptr;
+			_session->molecule_done(*_active);
+			discard(_active);
+		}
+		else if (_active == &(*current)) {
+			// The current molecule was stopped or played to the end
 
-				if (pos >= n->length()) {
-					discard(&(*n));
-					n = next();
-				}
-				else if (n->_mode & m_loop) {
-					pos = pos % n->length();
-					n->set_position(pos);
+			if (r == sched_end_of_file) {
+				++current->_current;
+				if (!current->is_active()) {
+					current->_time_stopped = now;
 				}
 			}
-		}
-		else if (n->_mode & m_loop) {
-			if (n->_current >= n->size()) {
-				// rewind
-				n->set_position(0);
+			else {
+				current->_time_stopped = now;
+				current->set_position(now - current->_time_started);
 			}
 		}
 	}
 
-	if (n->is_active()) {
+	if (current->_mode & m_loop) {
 
-		AudioOpPtr &a = n->current();
+		if (current->_mode & m_restart && !current->is_active()) {
+			current->set_position(0);
+		}
+		else if (current->_mode & m_mute) {
+			size_t length = current->length();
+			size_t pos = current->_time_started ? (now - current->_time_started) % length : 0;
+			DEBUG_PRINTF("setting position to %d\n", pos);
+			current->set_position(pos);
+		}
+		else if (current->_mode & m_pause) {
+			size_t pos = current->_time_stopped ? (now - current->_time_stopped) % current->length() : 0;
+			current->set_position(pos);
+		}
+	}
+
+	if (current->is_active()) {
+
+		AudioOpPtr &a = current->current();
 
 		int err = a->start();
 		if (err) {
 			DEBUG_PRINTF("%s failed: %s\n", a->desc().c_str(), strerror(err));
-			n->_atoms.erase(n->_atoms.begin() + n->_current);
-			n->_current++;
+			current->_atoms.erase(current->_atoms.begin() + current->_current);
+			current->_current++;
 			return err;
 		}
-		else {
-			_active = &(*n);
-			DEBUG_INFO("%s started\n", a->desc().c_str());
+
+		if (current->_current == 0) {
+			current->_time_started = now;
 		}
+		_active = &(*current);
+		DEBUG_INFO("%s started\n", a->desc().c_str());
 	}
 	else {
-		if (r == sched_end_of_file) {
-			_molecules[n->_priority].erase(n);
-		}
-	}
+		_active = nullptr;
+		_molecules[current->_priority].erase(current);
+		_session->molecule_done(*current);
 
-	n->_time_started = tmr_jiffies();
+		return schedule(r);
+	}
 
 	return 0;
 }
 
 int VQueue::enqueue(const Molecule& m) {
-
 	_molecules[m._priority].push_back(m);
-	auto n = next();
-	assert(n != end());
 
-	if (_active && _active->_priority < m._priority) {
+	if (!_active || _active->_priority < m._priority) {
+		if (_active) {
+			size_t now = tmr_jiffies();
+
+			_active->_time_stopped = now;
+		}
+
 		return schedule(sched_interrupt);
 	}
+
+	return 0;
 }
 
 Session::Session(struct call *call, struct json_tcp *jt) : _call(call), _jt(jt), _queue(this) {
@@ -460,6 +470,7 @@ void Session::hangup(int16_t scode, const char* reason) {
 		odict_entry_add(od, "type", ODICT_STRING, "call_closed");
 		odict_entry_add(od, "status_code", ODICT_INT, scode);
 		odict_entry_add(od, "reason", ODICT_STRING, reason);
+		odict_entry_add(od, "id", ODICT_STRING, _id.c_str());
 
 		json_tcp_send(_jt, od);
 	}
@@ -490,6 +501,17 @@ odict *create_response(const char* type, const char* token, int result)
 }
 
 extern "C" {
+
+	void json_tcp_disconnected()
+	{
+		// Lost connection to world, hangup all calls
+		for (auto &[id, session] : Sessions) {
+			session.hangup(500, "Connection to world lost");
+		}
+
+		Sessions.clear();
+	}
+
 	void villa_call_event_handler(struct call *call, enum call_event ev,
 			    const char *str, void *arg)
 	{
@@ -575,7 +597,6 @@ extern "C" {
 			if (session->second._queue._active) {
 				Molecule *stopped = session->second._queue._active;
 				stopped->_time_stopped = now;
-				stopped->_position = now - stopped->_time_started;
 
 				session->second._queue.schedule(VQueue::sched_end_of_file);
 			}

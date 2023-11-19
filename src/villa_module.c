@@ -13,6 +13,8 @@
 
 #include "json_tcp.h"
 
+extern void json_tcp_disconnected();
+
 extern void villa_event_handler(struct ua *ua, enum ua_event ev,
 	struct call *call, const char *prm, void *arg);
 
@@ -99,6 +101,7 @@ static int encode_response(int cmd_error, struct mbuf *resp, const char *token)
 	return err;
 }
 
+
 static bool command_handler(const struct odict *od, int *errp, void *arg)
 {
 	struct ctrl_st *st = arg;
@@ -148,7 +151,7 @@ static void tcp_conn_handler(const struct sa *peer, void *arg)
 	st->jt = mem_deref(st->jt);
 
 	(void)tcp_accept(&st->tc, st->ts, NULL, NULL, tcp_close_handler, st);
-	(void)json_tcp_insert(&st->jt, st->tc, 0, command_handler, st);
+	(void)json_tcp_insert(&st->jt, st->tc, 0, command_handler, json_tcp_disconnected, st);
 }
 
 

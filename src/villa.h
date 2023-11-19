@@ -80,7 +80,7 @@ public:
 	virtual void set_offset(size_t offset) { _offset = offset; }
 	virtual size_t offset() const { return _offset; }
 
-	virtual size_t length() const { return _length; }
+	virtual size_t length() const;
 
 	virtual std::string desc() { return std::string("play ") + _filename; }
 
@@ -88,7 +88,7 @@ protected:
 
 	struct audio *_audio = nullptr;
 	std::string _filename;
-	size_t _length = 0; // length in ms
+	mutable size_t _length = 0; // length in ms
 	size_t _offset = 0; // offset in ms
 };
 
@@ -172,7 +172,6 @@ struct Molecule {
 	size_t _current = 0;
 	size_t _time_started = 0;
 	size_t _time_stopped = 0;
-	size_t _position = 0;
 	int _priority = 0;
 	mode _mode;
 	std::string _id;

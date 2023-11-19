@@ -7,8 +7,8 @@ import logging
 from molecule import pr_background, pr_normal, mode_loop, mode_mute, mode_discard
 
 def call_later(delay, callback, *args, context=None):
-	 loop = asyncio.get_event_loop()
-	 return loop.call_later(delay, callback, *args, context=context)
+	loop = asyncio.get_event_loop()
+	return loop.call_later(delay, callback, *args, context=context)
 
 class Caller(object):
 	def __init__(self, transport, data):
@@ -16,6 +16,10 @@ class Caller(object):
 		self.call_id = data['id']
 		self.data = data
 		self.token_count = 0
+
+	@staticmethod
+	def accept_incoming(details):
+		return True
 
 	def send_command(self, command, *args):
 		self.token_count += 1
@@ -35,7 +39,7 @@ class Caller(object):
 							{ 'type': 'play', 'filename': 'record.wav', 'max_silence': -1 }, 17)
 		elif dtmf == '#':
 			self.send_command('enqueue', pr_normal, mode_discard,
-							{ 'type': 'play', 'filename': '/usr/local/share/baresip/villa/Villa/help_s16.wav', 'max_silence': -1 })
+							{ 'type': 'play', 'filename': '/usr/local/share/baresip/villa/Villa/help_s16.wav', 'max_silence': 2000 })
 
 
 	def enqueue(self, molecule):
@@ -43,15 +47,16 @@ class Caller(object):
 		self.send_command('enqueue', *args)
 
 	def call_accepted(self):
-		self.send_command('enqueue', pr_background, mode_loop,
-		 				{ 'type': 'play', 'filename': '/usr/local/share/baresip/villa/Villa/diele/dieleatm_s16.wav'})
-
+		self.send_command('enqueue', pr_background, mode_loop | mode_mute,
+		 				{ 'type': 'play', 'filename': '/usr/local/share/baresip/villa/Villa/pipiszimmer/party_s16.wav'})
 
 class VillaProtocol(asyncio.Protocol):
-	def __init__(self, on_con_lost):
+	def __init__(self, on_con_lost, caller_class=Caller):
 		self.on_con_lost = on_con_lost
+		self.caller_class = caller_class
 		self.current_message = ''
 		self.callers = {}
+		self.call_data = {}
 
 	def send(self, command):
 		cmd = (json.dumps(command) + '\r\n').encode()
@@ -69,17 +74,24 @@ class VillaProtocol(asyncio.Protocol):
 
 	def event_call_incoming(self, data):
 		call_id = data['id']
-		self.callers[call_id] = Caller(self, data)
-		self.send_command('answer', call_id, token=call_id)
+		self.call_data[call_id] = data
+		if self.caller_class.accept_incoming(data):
+			self.send_command('answer', call_id, token=call_id)
+		else:
+			self.send_command('hangup', call_id, token=call_id)
 
 	def event_call_closed(self, data):
 		call_id = data['id']
+		self.callers[call_id].event_hangup(data)
 		del self.callers[call_id]
 
 	def response_received(self, command, token, result):
 		if command == 'answer':
 			if result == 0:
-				caller = self.callers[token]
+				call_data = self.call_data[token]
+				caller = self.caller_class(self, call_data)
+				del self.call_data[token]
+				self.callers[token] = caller
 				caller.call_accepted()
 			else:
 				logging.warning(f'{token} answer failed: {os.strerror(result)}')
@@ -170,7 +182,7 @@ class CallerIterator(object):
 			self.invalid = True
 
 
-async def main(server, port):
+async def run(server, port):
 	# Get a reference to the event loop as we plan to use
 	# low-level APIs.
 	loop = asyncio.get_running_loop()
@@ -201,4 +213,4 @@ async def main(server, port):
 
 if __name__ == '__main__':
 	logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s', level=logging.INFO)
-	asyncio.run(main('127.0.0.1', 1235))
+	asyncio.run(run('127.0.0.1', 1235))
