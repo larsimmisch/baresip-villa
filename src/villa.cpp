@@ -355,7 +355,7 @@ int VQueue::schedule(reason r) {
 			current->set_position(pos);
 		}
 		else if (current->_mode & m_pause) {
-			size_t pos = current->_time_stopped ? (now - current->_time_stopped) % current->length() : 0;
+			size_t pos = current->_time_stopped ? (current->_time_stopped - current->_time_started) % current->length() : 0;
 			current->set_position(pos);
 		}
 	}
@@ -363,7 +363,6 @@ int VQueue::schedule(reason r) {
 	if (current->is_active()) {
 
 		AudioOpPtr &a = current->current();
-
 		int err = a->start();
 		if (err) {
 			DEBUG_PRINTF("%s failed: %s\n", a->desc().c_str(), strerror(err));
