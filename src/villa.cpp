@@ -271,7 +271,7 @@ int Record::start() {
 		tmr_start(&_tmr_max_length, _max_length, record_timer, &_timer_max_length_id);
 	}
 
-	if (_max_silence > 0) {
+	if (_max_silence > 0 && !_session->_vad) {
 		tmr_start(&_tmr_max_silence, _max_silence, record_timer, &_timer_max_silence_id);
 	}
 
@@ -293,8 +293,13 @@ void Record::stop() {
 }
 
 void Record::event_vad(Session*, bool vad) {
-	if (vad && _max_silence > 0) {
-		tmr_continue(&_tmr_max_silence, _max_silence, record_timer, &_timer_max_silence_id);
+	if (_max_silence > 0) {
+		if (vad) {
+			tmr_cancel(&_tmr_max_silence);
+		}
+		else {
+			tmr_start(&_tmr_max_silence, _max_silence, record_timer, &_timer_max_silence_id);
+		}
 	}
 }
 
@@ -323,9 +328,9 @@ int VQueue::schedule(reason r) {
 
 		// Just remove Molecules with m_discard that are interrupted
 		if (_active->_mode & m_discard && _active != &*current) {
-			_active = nullptr;
-			_session->molecule_done(*_active);
 			discard(_active);
+			_session->molecule_done(*_active);
+			_active = nullptr;
 		}
 		else if (_active == &(*current)) {
 			// The current molecule was stopped or played to the end
@@ -355,7 +360,10 @@ int VQueue::schedule(reason r) {
 			current->set_position(pos);
 		}
 		else if (current->_mode & m_pause) {
-			size_t pos = current->_time_stopped ? (current->_time_stopped - current->_time_started) % current->length() : 0;
+			size_t pos = 0;
+			if (current->is_active()) {
+				pos = current->_time_stopped ? (current->_time_stopped - current->_time_started) % current->length() : 0;
+			}
 			current->set_position(pos);
 		}
 	}
@@ -416,7 +424,8 @@ void Session::molecule_done(const Molecule& m) const {
 
 		odict_entry_add(od, "event", ODICT_BOOL, true);
 		odict_entry_add(od, "type", ODICT_STRING, "molecule_done");
-		odict_entry_add(od, "id", ODICT_STRING, m._id.c_str());
+		odict_entry_add(od, "id", ODICT_STRING, _id.c_str());
+		odict_entry_add(od, "token", ODICT_STRING, m._id.c_str());
 
 		json_tcp_send(_jt, od);
 	}
@@ -627,6 +636,8 @@ extern "C" {
 			if (elems.size() >= 3) {
 				if (elems[0] == "fvad" && elems[1] == "vad_rx") {
 					bool vad = elems[2] == "on";
+
+					session->second._vad = vad;
 
 					Molecule *active = session->second._queue._active;
 					if (active && active->is_active()) {
@@ -860,7 +871,7 @@ extern "C" {
 				e = (const odict_entry*)le->data;
 				if (odict_entry_type(e) != ODICT_OBJECT) {
 
-					if (count == 4 && odict_entry_type(e) == ODICT_OBJECT) {
+					if (count == 4 && odict_entry_type(e) == ODICT_STRING) {
 						// the optional molecule id
 						m._id = odict_entry_str(e);
 						continue;

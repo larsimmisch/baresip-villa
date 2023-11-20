@@ -31,12 +31,12 @@ class Caller(object):
 		dtmf = data['key']
 		logging.info(f'{self.call_id} received DTMF {dtmf}')
 		if dtmf == '1':
-			self.send_command('enqueue', pr_background, mode_loop | mode_mute,
+			self.send_command('enqueue', pr_normal, mode_discard, "17",
 							{ 'type': 'play', 'filename': '/usr/local/share/baresip/villa/Villa/beep_s16.wav'},
-							{ 'type': 'record', 'filename': 'record.wav', 'max_silence': -1, 'dtmf_stop': True }, 17)
+							{ 'type': 'record', 'filename': 'record.wav', 'max_silence': 1000, 'dtmf_stop': True })
 		elif dtmf == '2':
-			self.send_command('enqueue', pr_normal, mode_discard,
-							{ 'type': 'play', 'filename': 'record.wav', 'max_silence': -1 }, 17)
+			self.send_command('enqueue', pr_normal, mode_discard, "17",
+							{ 'type': 'play', 'filename': 'record.wav' })
 		elif dtmf == '#':
 			self.send_command('enqueue', pr_normal, mode_discard,
 							{ 'type': 'play', 'filename': '/usr/local/share/baresip/villa/Villa/help_s16.wav', 'max_silence': 2000 })

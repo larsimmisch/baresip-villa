@@ -235,6 +235,7 @@ struct Session {
 	struct call *_call;
 	struct json_tcp *_jt;
 	VQueue _queue;
+	bool _vad;
 };
 
 #endif // #define _VILLA_H_
