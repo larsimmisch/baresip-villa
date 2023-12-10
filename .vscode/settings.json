@@ -53,7 +53,10 @@
 		"typeinfo": "cpp",
 		"variant": "cpp",
 		"charconv": "cpp",
-		"algorithm": "cpp"
+		"algorithm": "cpp",
+		"__tree": "cpp",
+		"list": "cpp",
+		"map": "cpp"
 	},
 	"editor.insertSpaces": false,
 	"[python]": {

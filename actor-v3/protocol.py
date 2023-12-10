@@ -11,15 +11,14 @@ def call_later(delay, callback, *args, context=None):
 	return loop.call_later(delay, callback, *args, context=context)
 
 class Caller(object):
-	def __init__(self, transport, data):
+	def __init__(self, transport, world, data):
 		self.transport = transport
+		self.world = world
 		self.call_id = data['id']
 		self.data = data
 		self.token_count = 0
-
-	@staticmethod
-	def accept_incoming(details):
-		return True
+		self.dialog = None
+		self.location = None
 
 	def send_command(self, command, *args):
 		self.token_count += 1
@@ -27,33 +26,36 @@ class Caller(object):
 		self.transport.send_command(command, self.call_id, *args, token=token)
 		return token
 
+	def enqueue(self, molecule):
+		args = molecule.as_args()
+		return self.send_command('enqueue', *args)
+
+	def discard(self, prio_from, prio_to):
+		return self.send_command('discard', prio_from, prio_to)
+
+	def call_accepted(self):
+		self.world.enter(self)
+
 	def event_dtmf_begin(self, data):
 		dtmf = data['key']
 		logging.info(f'{self.call_id} received DTMF {dtmf}')
-		if dtmf == '1':
-			self.send_command('enqueue', pr_normal, mode_discard, "17",
-							{ 'type': 'play', 'filename': '/usr/local/share/baresip/villa/Villa/beep_s16.wav'},
-							{ 'type': 'record', 'filename': 'record.wav', 'max_silence': 1000, 'dtmf_stop': True })
-		elif dtmf == '2':
-			self.send_command('enqueue', pr_normal, mode_discard, "17",
-							{ 'type': 'play', 'filename': 'record.wav' })
-		elif dtmf == '#':
-			self.send_command('enqueue', pr_normal, mode_discard,
-							{ 'type': 'play', 'filename': '/usr/local/share/baresip/villa/Villa/help_s16.wav', 'max_silence': 2000 })
 
+		if self.dialog:
+			if self.dialog.event_dtmf_begin(self, dtmf):
+				self.dialog = None
+		elif self.location:
+			self.location.event_dtmf_begin(self, dtmf)
 
-	def enqueue(self, molecule):
-		args = molecule.as_args()
-		self.send_command('enqueue', *args)
-
-	def call_accepted(self):
-		self.send_command('enqueue', pr_background, mode_loop | mode_mute,
-		 				{ 'type': 'play', 'filename': '/usr/local/share/baresip/villa/Villa/pipiszimmer/party_s16.wav'})
+	def call_closed(self, data):
+		if self.location:
+			self.location.leave()
+		self.world.leave(self)
 
 class VillaProtocol(asyncio.Protocol):
-	def __init__(self, on_con_lost, caller_class=Caller):
+	def __init__(self, on_con_lost, world, caller_class=Caller):
 		self.on_con_lost = on_con_lost
 		self.caller_class = caller_class
+		self.world = world
 		self.current_message = ''
 		self.callers = {}
 		self.call_data = {}
@@ -70,26 +72,28 @@ class VillaProtocol(asyncio.Protocol):
 	def connection_made(self, transport):
 		logging.info('connected')
 		self.transport = transport
-		self.send_command('listen', '<sip:villa@immisch-macbook-pro.local>')
+		self.world.connection_made(self)
 
 	def event_call_incoming(self, data):
 		call_id = data['id']
 		self.call_data[call_id] = data
-		if self.caller_class.accept_incoming(data):
+		if self.world.accept_incoming(data):
 			self.send_command('answer', call_id, token=call_id)
 		else:
 			self.send_command('hangup', call_id, token=call_id)
 
 	def event_call_closed(self, data):
 		call_id = data['id']
-		self.callers[call_id].event_hangup(data)
+		caller = self.callers[call_id]
+		caller.event_hangup(data)
+		self.world.left(caller)
 		del self.callers[call_id]
 
 	def response_received(self, command, token, result):
 		if command == 'answer':
 			if result == 0:
 				call_data = self.call_data[token]
-				caller = self.caller_class(self, call_data)
+				caller = self.caller_class(self, self.world, call_data)
 				del self.call_data[token]
 				self.callers[token] = caller
 				caller.call_accepted()
@@ -106,6 +110,9 @@ class VillaProtocol(asyncio.Protocol):
 				if jd.get('event', None):
 					# look up the method named in type (lower case)
 					t = jd['type']
+					if t == 'version':
+						logging.info(f'protocol version {jd["protocol_version"]}')
+						return
 					if t:
 						t = t.lower()
 						cid = jd.get('id')
@@ -132,57 +139,8 @@ class VillaProtocol(asyncio.Protocol):
 		logging.info('The server closed the connection')
 		self.on_con_lost.set_result(True)
 
-class CallerIterator(object):
-	"""A specialised iterator for caller lists.
-	It is cyclic and supports deletion of items in the sequence while the
-	sequence is iterated over."""
 
-	def __init__(self, items):
-		self.items = items
-		self.pos = None
-		self.invalid = False
-
-	def next(self):
-		if not len(self.items):
-			return None
-
-		if self.pos is None:
-			self.pos = 0
-		elif self.invalid:
-			self.invalid = False
-			self.pos = self.pos % (len(self.items) - 1)
-		else:
-			self.pos = (self.pos + 1) % len(self.items)
-
-		return self.items[self.pos]
-
-	def prev(self):
-		if not len(self.items):
-			return None
-
-		if self.pos is None:
-			self.pos = len(self.items) - 1
-		else:
-			self.pos = (self.pos - 1) % len(self.items)
-
-		return self.items[self.pos]
-
-	def invalidate(self, item):
-		"""Indicate that an item in the sequence we iterate over will be
-		deleted soon. This method gives the iterator the chance to adjust
-		internal position counters.
-
-		Note that the item must still be in the sequence when this method
-		is called - the item should be deleted afterwards."""
-		i = self.items.index(item)
-
-		if i < self.pos:
-			self.pos = self.pos - 1
-		elif i == self.pos:
-			self.invalid = True
-
-
-async def run(server, port):
+async def run(server, port, world, caller_class=Caller):
 	# Get a reference to the event loop as we plan to use
 	# low-level APIs.
 	loop = asyncio.get_running_loop()
@@ -196,7 +154,7 @@ async def run(server, port):
 			on_con_lost = loop.create_future()
 
 			transport, protocol = await loop.create_connection(
-				lambda: VillaProtocol(on_con_lost),
+				lambda: VillaProtocol(on_con_lost, world, caller_class),
 				server, port)
 
 			timeout = 0.125
@@ -212,5 +170,38 @@ async def run(server, port):
 
 
 if __name__ == '__main__':
+
+	class TestWorld(object):
+
+		def connection_made(self, transport):
+			transport.send_command('listen', '<sip:villa@immisch-macbook-pro.local>')
+
+		def accept_incoming(self, details):
+			return True
+
+		def enter(self, caller):
+			pass
+
+	class TestCaller(Caller):
+		def call_accepted(self):
+			self.send_command('enqueue', pr_background, mode_loop | mode_mute,
+		 				{ 'type': 'play', 'filename': '/usr/local/share/baresip/villa/Villa/pipiszimmer/party_s16.wav'})
+
+		def event_dtmf_begin(self, data):
+			dtmf = data['key']
+			logging.info(f'{self.call_id} received DTMF {dtmf}')
+			if dtmf == '1':
+				self.send_command('enqueue', pr_normal, mode_discard, "17",
+								{ 'type': 'play', 'filename': '/usr/local/share/baresip/villa/Villa/beep_s16.wav'},
+								{ 'type': 'record', 'filename': 'record.wav', 'max_silence': 2500, 'dtmf_stop': True })
+			elif dtmf == '2':
+				self.send_command('enqueue', pr_normal, mode_discard, "17",
+								{ 'type': 'play', 'filename': 'record.wav' })
+			elif dtmf == '#':
+				self.send_command('enqueue', pr_normal, mode_discard,
+								{ 'type': 'play', 'filename': '/usr/local/share/baresip/villa/Villa/help_s16.wav', 'max_silence': 2000 })
+
+
+
 	logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s', level=logging.INFO)
-	asyncio.run(run('127.0.0.1', 1235))
+	asyncio.run(run('127.0.0.1', 1235, TestWorld(), TestCaller))

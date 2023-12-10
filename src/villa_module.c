@@ -135,8 +135,7 @@ static void tcp_close_handler(int err, void *arg)
 
 	villa_tcp_disconnected();
 
-	if (st->tc)
-		st->tc = mem_deref(st->tc);
+	st->tc = mem_deref(st->tc);
 }
 
 

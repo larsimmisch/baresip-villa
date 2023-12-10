@@ -54,7 +54,7 @@ static bool json_tcp_recv_handler(int *errp, struct mbuf *mbx, bool *estab,
 
 			++jt->n_rx;
 
-			struct odict *od;
+			struct odict *od = NULL;
 			const char* str = (const char*)(rcvbuf->buf);
 			err = json_decode_odict(&od, DICT_BSIZE, str, strlen(str),
 				MAX_LEVELS);
@@ -67,6 +67,7 @@ static bool json_tcp_recv_handler(int *errp, struct mbuf *mbx, bool *estab,
 					DEBUG_PRINTF("villa: failed to decode JSON (%m). Closing connection\n", err);
 
 				*errp = EINVAL;
+				mem_deref(od);
 				return true;
 			}
 

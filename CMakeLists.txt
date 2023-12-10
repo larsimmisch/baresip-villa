@@ -75,8 +75,6 @@ else()
   )
 endif()
 
-
-
 find_package(re CONFIG REQUIRED HINTS re/cmake)
 
 list(APPEND RE_DEFINITIONS
@@ -132,6 +130,16 @@ if(STATIC)
 else()
   add_library(${PROJECT_NAME} MODULE ${SOURCES})
 endif()
+
+# if(CMAKE_BUILD_TYPE MATCHES "Debug")
+#  set(
+#    CMAKE_C_FLAGS
+#    "${CMAKE_C_FLAGS} -fsanitize=undefined -fsanitize=address"
+#  )
+#  target_link_options(${PROJECT_NAME}
+#    BEFORE PUBLIC -fsanitize=undefined PUBLIC -fsanitize=address
+#  )
+# endif()
 
 ##############################################################################
 #

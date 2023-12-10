@@ -77,6 +77,9 @@ std::string mode_string(mode m) {
 			case m_loop:
 				modestr += "loop";
 				break;
+			case m_dtmf_stop:
+				modestr += "dtmf_stop";
+				break;
 		}
 	}
 
@@ -85,32 +88,6 @@ std::string mode_string(mode m) {
 	}
 
 	return modestr;
-}
-
-size_t Play::set_filename(const std::string& filename) {
-
-	struct aufile* au;
-	struct aufile_prm prm;
-	struct config_audio *cfg = &conf_config()->audio;
-
-	_filename = filename;
-
-	std::string path(cfg->audio_path);
-	if (path.back() != '/') {
-		path += "/";
-	}
-	path += filename;
-
-	int err = aufile_open(&au, &prm, path.c_str(), AUFILE_READ);
-	if (err) {
-		return 0;
-	}
-
-	size_t length = aufile_get_length(au, &prm);
-
-	mem_deref(au);
-
-	return length;
 }
 
 // @pragma mark Molecule
@@ -204,11 +181,46 @@ std::vector<Molecule>::iterator VQueue::next() {
 	return end();
 }
 
+#pragma mark Play
+
+size_t Play::set_filename(const std::string& filename) {
+
+	struct aufile* au = nullptr;
+	struct aufile_prm prm;
+	struct config_audio *cfg = &conf_config()->audio;
+
+	_filename = filename;
+
+	std::string path(cfg->audio_path);
+	if (path.back() != '/') {
+		path += "/";
+	}
+	path += filename;
+
+	int err = aufile_open(&au, &prm, path.c_str(), AUFILE_READ);
+	if (err) {
+		return 0;
+	}
+
+	size_t length = aufile_get_length(au, &prm);
+
+	mem_deref(au);
+
+	return length;
+}
+
+std::string Play::desc() const {
+	std::stringstream s;
+	s << "play " << _filename << " offset: " << _offset;
+	return s.str();
+}
+
 int Play::start() {
 
 	_audio = call_audio(_session->_call);
 	_stopped = false;
 
+	// int err = audio_set_source(_audio, "aufile", _filename.c_str());
 	int err = audio_set_source_offset(_audio, "aufile", _filename.c_str(), _offset);
 	if (err) {
 		_audio = nullptr;
@@ -242,6 +254,8 @@ size_t Play::length() const
 
 	return aufile_get_length(f, &p);
 }
+
+#pragma mark Record
 
 void record_timer(void *arg) {
 
@@ -313,6 +327,13 @@ void Record::event_dtmf(Session *session, char, bool end)
 	}
 }
 
+std::string Record::desc() const {
+	std::stringstream s;
+	s << "record " << _filename << " max_silence: " << _max_silence << " max_length: " <<  _max_length;
+	return s.str();
+}
+
+#pragma mark VQueue
 
 int VQueue::schedule(reason r) {
 
@@ -492,7 +513,7 @@ std::unordered_map<std::string, Session> Sessions;
 std::vector<ua*> UserAgents;
 std::unordered_map<std::string,call*> PendingCalls;
 
-odict *create_response(const char* type, const char* token, int result)
+odict *create_response(const char* type, const char* token, int result, const char* message=nullptr)
 {
 	odict *od = nullptr;
 	odict_alloc(&od, DICT_BSIZE);
@@ -504,6 +525,9 @@ odict *create_response(const char* type, const char* token, int result)
 		odict_entry_add(od, "token", ODICT_STRING, token);
 	}
 	odict_entry_add(od, "result", ODICT_INT, result);
+	if (message) {
+		odict_entry_add(od, "message", ODICT_STRING, message);
+	}
 
 	return od;
 }
@@ -696,14 +720,14 @@ extern "C" {
 
 			struct le *le = parms->lst.head;
 			if (!le) {
-				warning("command listen without parameter");
-				return nullptr;
+				warning("command %s: parameter missing\n", command);
+				return create_response(command, token, EINVAL, "parameter missing");
 			}
 
 			const odict_entry *e = (const odict_entry*)le->data;
 			if (odict_entry_type(e) != ODICT_STRING) {
-				warning("command listen parameter invalid type");
-				return nullptr;
+				warning("command %s: parameter has invalid type\n", command);
+				return create_response(command, token, EINVAL, "parameter has invalid type");
 			}
 
 			const char* addr = odict_entry_str(e);
@@ -715,27 +739,27 @@ extern "C" {
 				UserAgents.push_back(agent);
 			}
 
-			return create_response("listen", token, err);
+			return create_response(command, token, err);
 		}
 		else if (strcmp(command, "answer") == 0) {
 
 			struct le *le = parms->lst.head;
 			if (!le) {
-				warning("command accept without parameter");
-				return nullptr;
+				warning("command %s: parameter missing\n", command);
+				return create_response(command, token, EINVAL, "parameter missing");
 			}
 
 			const odict_entry *e = (const odict_entry*)le->data;
 			if (odict_entry_type(e) != ODICT_STRING) {
-				warning("command accept parameter invalid type");
-				return nullptr;
+				warning("command %s: parameter has invalid type\n", command);
+				return create_response(command, token, EINVAL, "parameter has invalid type");
 			}
 
 			std::string cid(odict_entry_str(e));
 
 			auto cit = PendingCalls.find(cid);
 			if (cit == PendingCalls.end()) {
-				return create_response("answer", token, EINVAL);
+				return create_response(command, token, EINVAL, "no incoming call pending for call id");
 			}
 
 			call *call = cit->second;
@@ -754,20 +778,20 @@ extern "C" {
 
 			PendingCalls.erase(cit);
 
-			return create_response("answer", token, err);
+			return create_response(command, token, err);
 		}
 		else if (strcmp(command, "hangup") == 0) {
 
 			struct le *le = parms->lst.head;
 			if (!le) {
-				warning("command hangup without parameter\n");
-				return nullptr;
+				warning("command %s: parameter missing\n", command);
+				return create_response(command, token, EINVAL, "parameter missing");
 			}
 
 			const odict_entry *e = (const odict_entry*)le->data;
 			if (odict_entry_type(e) != ODICT_STRING) {
-				warning("command hangup parameter invalid type\n");
-				return nullptr;
+				warning("command %s: parameter has invalid type\n", command);
+				return create_response(command, token, EINVAL, "parameter has invalid type");
 			}
 
 			const char* cid = odict_entry_str(e);
@@ -779,8 +803,8 @@ extern "C" {
 			if (le) {
 				const odict_entry *e = (const odict_entry*)le->data;
 				if (odict_entry_type(e) != ODICT_INT) {
-					warning("command hangup parameter 2 invalid type\n");
-					return nullptr;
+					warning("command %s: parameter 2 has invalid type\n", command);
+					return create_response(command, token, EINVAL, "parameter 2 has invalid type");
 				}
 				scode = odict_entry_int(e);
 
@@ -788,8 +812,8 @@ extern "C" {
 				if (le) {
 					e = (const odict_entry*)le->data;
 					if (odict_entry_type(e) != ODICT_STRING) {
-						warning("command hangup parameter 3 invalid type\n");
-						return nullptr;
+						warning("command %s parameter 3 invalid type\n", command);
+						return create_response(command, token, EINVAL, "parameter 3 has invalid type");
 					}
 					reason = odict_entry_str(e);
 				}
@@ -807,7 +831,7 @@ extern "C" {
 					call_hangup(cit->second, scode, reason);
 				}
 				else {
-					create_response("hangup", token, EINVAL);
+					create_response(command, token, EINVAL);
 				}
 			}
 
@@ -817,50 +841,55 @@ extern "C" {
 
 			struct le *le = parms->lst.head;
 			if (!le) {
-				warning("command enqueue: missing parameters\n");
-				return nullptr;
+				warning("command %s: parameters missing\n", command);
+				return create_response(command, token, EINVAL, "parameters missing");
 			}
 
 			const odict_entry *e = (const odict_entry*)le->data;
 			if (odict_entry_type(e) != ODICT_STRING) {
-				warning("command enqueue: parameter 1 (call_id) invalid type\n");
-				return nullptr;
+				warning("command %s: parameter 1 (call_id) has invalid type\n", command);
+				return create_response(command, token, EINVAL, "parameter 1 (call_id) has invalid type");
 			}
 
 			const char *call_id = odict_entry_str(e);
 			auto sit = Sessions.find(call_id);
 			if (sit == Sessions.end()) {
-				warning("command enqueue: session %s not found\n", call_id);
-				return nullptr;
+				warning("command %s: session %s not found\n", command, call_id);
+				return create_response(command, token, EINVAL, "session not found");
 			}
 
 			Session& session = sit->second;
 
 			le = le->next;
 			if (!le) {
-				warning("command enqueue: parameter 2 (priority) missing\n");
-				return nullptr;
+				warning("command %s: parameter 2 (priority) missing\n", command);
+				return create_response(command, token, EINVAL, "parameter 2 (priority) missing");
 			}
 
 			e = (const odict_entry*)le->data;
 			if (odict_entry_type(e) != ODICT_INT) {
-				warning("command enqueue: parameter 2 (priority) invalid type\n");
-				return nullptr;
+				warning("command %s: parameter 2 (priority) invalid type\n", command);
+				return create_response(command, token, EINVAL, "parameter 2 (priority) invalid type");
 			}
 
 			Molecule m;
 			m._priority = odict_entry_int(e);
 
+			if (m._priority > max_priority) {
+				warning("command %s: parameter 2 (priority) priority too large\n", command);
+				return create_response(command, token, EINVAL, "parameter 2 (priority) too large");
+			}
+
 			le = le->next;
 			if (!le) {
-				warning("command enqueue: parameter 3 (mode) missing\n");
-				return nullptr;
+				warning("command %s: parameter 3 (mode) missing\n", command);
+				return create_response(command, token, EINVAL, "parameter 3 (mode) missing");
 			}
 
 			e = (const odict_entry*)le->data;
 			if (odict_entry_type(e) != ODICT_INT) {
-				warning("command enqueue: parameter 3 (mode) invalid type\n");
-				return nullptr;
+				warning("command %s: parameter 3 (mode) invalid type\n", command);
+				return create_response(command, token, EINVAL, "parameter 3 (mode) invalid type");
 			}
 
 			m._mode = (mode)odict_entry_int(e);
@@ -877,8 +906,8 @@ extern "C" {
 						continue;
 					}
 
-					warning("command enqueue: parameter %d (atom) invalid type\n", count);
-					return nullptr;
+					warning("command %s: parameter %d (atom) has invalid type\n", command, count);
+					return create_response(command, token, EINVAL, "parameter (atom) has invalid type");
 				}
 
 				struct odict *atom = odict_entry_object(e);
@@ -887,8 +916,8 @@ extern "C" {
 				if (type == "play") {
 					const char* filename = odict_string(atom, "filename");
 					if (!filename) {
-						warning("command enqueue: parameter %d (atom) missing filename\n", count);
-						return nullptr;
+						warning("command %s: parameter %d (atom play) missing filename\n", command, count);
+						return create_response(command, token, EINVAL, "parameter (atom play) missing filename");
 					}
 
 					m.push_back(std::make_shared<Play>(&session, filename));
@@ -901,8 +930,8 @@ extern "C" {
 				else if (type == "record") {
 					const char* filename = odict_string(atom, "filename");
 					if (!filename) {
-						warning("command enqueue: parameter %d (atom) missing filename", count);
-						return nullptr;
+						warning("command %s: parameter %d (atom) missing filename", command, count);
+						return create_response(command, token, EINVAL, "parameter (atom record) missing filename");
 					}
 
 					uint64_t max_silence = 1000;
@@ -920,10 +949,77 @@ extern "C" {
 
 			session._queue.enqueue(m);
 
-			return create_response("enqueue", token, 0);
+			return create_response(command, token, 0);
+		}
+		else if (strcmp(command, "discard") == 0) {
+
+			struct le *le = parms->lst.head;
+			if (!le) {
+				warning("command %s: parameter missing\n", command);
+				return create_response(command, token, EINVAL, "parameter missing");
+			}
+
+			const odict_entry *e = (const odict_entry*)le->data;
+			if (odict_entry_type(e) != ODICT_STRING) {
+				warning("command %s: parameter has invalid type\n", command);
+				return create_response(command, token, EINVAL, "parameter has invalid type");
+			}
+
+			const char* call_id = odict_entry_str(e);
+			auto sit = Sessions.find(call_id);
+			if (sit == Sessions.end()) {
+				warning("command %s: session %s not found\n", command, call_id);
+				return create_response(command, token, EINVAL, "session not found");
+			}
+
+			Session& session = sit->second;
+
+			le = le->next;
+			if (!le) {
+				warning("command %s: parameter prio_from missing\n", command);
+				return create_response(command, token, EINVAL, "parameter missing");
+			}
+
+			e = (const odict_entry*)le->data;
+			if (odict_entry_type(e) != ODICT_INT) {
+				warning("command %s: parameter prio_from has invalid type\n", command);
+				return create_response(command, token, EINVAL, "parameter prio_from has invalid type");
+			}
+
+			int prio_from = odict_entry_int(e);
+			if (prio_from > max_priority) {
+				warning("command %s: parameter prio_from too large\n", command);
+				return create_response(command, token, EINVAL, "parameter prio_from too large");
+			}
+
+			le = le->next;
+			if (!le) {
+				warning("command %s: parameter prio_to missing\n", command);
+				return create_response(command, token, EINVAL, "parameter prio_from missing");
+			}
+
+			e = (const odict_entry*)le->data;
+			int prio_to = odict_entry_int(e);
+			if (prio_to > max_priority) {
+				warning("command %s: parameter prio_to too large\n", command);
+				return create_response(command, token, EINVAL, "parameter prio_to too large");
+			}
+
+			if (session._queue._active) {
+				session._queue._active->stop();
+				session._queue._active = nullptr;
+			}
+
+			for (int prio = prio_from; prio < prio_to; ++prio) {
+				session._queue._molecules[prio].clear();
+			}
+
+			session._queue.schedule(VQueue::sched_interrupt);
+
+			return create_response(command, token, 0);
 		}
 
-		return nullptr;
+		return create_response(command, token, EINVAL, "unknown command");
 	}
 
 	int villa_status(struct re_printf *pf, void *arg)

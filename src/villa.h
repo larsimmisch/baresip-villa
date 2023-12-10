@@ -32,7 +32,8 @@ enum mode {
 	m_restart = 8,
 	m_dont_interrupt = 16,
 	m_loop = 32,
-	m_last = 32,
+	m_dtmf_stop = 64,
+	m_last = 64,
 };
 
 
@@ -57,7 +58,7 @@ struct AudioOp {
 	virtual void event_vad(Session*, bool) {}
 	virtual void event_dtmf(Session*, char, bool) {}
 
-	virtual std::string desc() = 0;
+	virtual std::string desc() const  = 0;
 
 	Session *_session;
 	bool _stopped;
@@ -74,6 +75,7 @@ public:
 
 	virtual int start();
 	virtual void stop();
+
 	size_t set_filename(const std::string& filename);
 	const std::string& filename() const { return _filename; }
 
@@ -82,7 +84,7 @@ public:
 
 	virtual size_t length() const;
 
-	virtual std::string desc() { return std::string("play ") + _filename; }
+	virtual std::string desc() const;
 
 protected:
 
@@ -128,15 +130,13 @@ public:
 	virtual void event_vad(Session *, bool vad);
 	virtual void event_dtmf(Session*, char, bool);
 
-	void set_filename(const std::string& filename) { _filename = filename; }
 	const std::string& filename() const { return _filename; }
 
-	void set_max_silence(int max_silence) { _max_silence = max_silence; }
 	size_t max_silence() const { return _max_silence; }
 
 	virtual size_t length() const { return _length; }
 
-	virtual std::string desc() { return std::string("record ") + _filename; }
+	virtual std::string desc() const;
 
 protected:
 
@@ -162,6 +162,8 @@ struct Molecule {
 	size_t size() const { return _atoms.size(); }
 	AudioOpPtr &current();
 	bool is_active() const { return _current < size(); }
+
+	void stop() { if (is_active()) { current()->stop(); } }
 
 	size_t length(int start = 0, int end = -1) const;
 	void set_position(size_t position_ms);

@@ -1,3 +1,56 @@
+import logging
+from molecule import *
+from protocol import call_later
+
+class CallerIterator(object):
+	"""A specialised iterator for caller lists.
+	It is cyclic and supports deletion of items in the sequence while the
+	sequence is iterated over."""
+
+	def __init__(self, items):
+		self.items = items
+		self.pos = None
+		self.invalid = False
+
+	def next(self):
+		if not len(self.items):
+			return None
+
+		if self.pos is None:
+			self.pos = 0
+		elif self.invalid:
+			self.invalid = False
+			self.pos = self.pos % (len(self.items) - 1)
+		else:
+			self.pos = (self.pos + 1) % len(self.items)
+
+		return self.items[self.pos]
+
+	def prev(self):
+		if not len(self.items):
+			return None
+
+		if self.pos is None:
+			self.pos = len(self.items) - 1
+		else:
+			self.pos = (self.pos - 1) % len(self.items)
+
+		return self.items[self.pos]
+
+	def invalidate(self, item):
+		"""Indicate that an item in the sequence we iterate over will be
+		deleted soon. This method gives the iterator the chance to adjust
+		internal position counters.
+
+		Note that the item must still be in the sequence when this method
+		is called - the item should be deleted afterwards."""
+		i = self.items.index(item)
+
+		if i < self.pos:
+			self.pos = self.pos - 1
+		elif i == self.pos:
+			self.invalid = True
+
 class LocationData(object):
 	'''Per caller data for each location.'''
 	def __init__(self):
@@ -40,7 +93,7 @@ class Location(object):
 
 		self.callers.append(caller)
 
-	def leave(self, caller, gone = False):
+	def leave(self, caller):
 		'''Leave the location. Adjust caller list iterators
 		in all participants.'''
 
@@ -76,7 +129,7 @@ class Location(object):
 				c.enqueue(transition.m_in)
 
 	def generic_invalid(self, caller):
-		caller.enqueue(Beep(P_Normal, 2))
+		caller.enqueue(Beep(P_Normal, 1))
 
 	def orientation_timer(self, caller):
 		caller.user_data.tm_orientation = None
@@ -124,7 +177,7 @@ class Location(object):
 			caller.enqueue(Play(P_Normal, 'here_are.wav', 'many.wav',
 								'people.wav', prefix='lars'))
 
-	def event_dtmf_sbegin(self, caller, dtmf):
+	def event_dtmf_begin(self, caller, dtmf):
 		data = caller.user_data
 		data.cancel('tm_orientation')
 		if data.tm_move:
@@ -167,19 +220,19 @@ class Location(object):
 			else:
 				data.cancel('tm_starhash')
 				# inter digit timer for direct access
-				data.tm_starhash = callLater(3.0, self.starhash_timer)
+				data.tm_starhash = call_later(3.0, self.starhash_timer)
 				data.bf_starhash = data.bf_starhash + dtmf
 
 			return True
 
 		if dtmf == '5':
-			data.tm_move = callLater(2.0, self.move_timer, caller)
+			data.tm_move = call_later(2.0, self.move_timer, caller)
 			return True
 		elif dtmf == '6':
 			self.announce_others(caller)
 			return True
 		elif dtmf == '*':
-			data.tm_starhash = callLater(2.0, self.starhash_timer,
+			data.tm_starhash = call_later(2.0, self.starhash_timer,
 										 caller)
 			return True
 		elif dtmf == '#':
@@ -195,7 +248,7 @@ class Room(Location):
 	def __init__(self):
 		super(Room, self).__init__()
 		self.talk_id = 0
-		self.orientation = Play(P_Discard, 'helpmove_s16.wav', prefix=prefix)
+		self.orientation = Play(P_Discard, 'helpmove_s16.wav', prefix=self.prefix)
 
 	def gen_talk_id(self):
 		self.talk_id = self.talk_id + 1
@@ -206,8 +259,8 @@ class Room(Location):
 		if hasattr(self, 'background'):
 			caller.enqueue(self.background)
 
-	def leave(self, caller, gone = False):
-		super(Room, self).leave(caller, gone)
+	def leave(self, caller):
+		super(Room, self).leave(caller)
 		if hasattr(self, 'background'):
 			caller.discard(P_Background, P_Normal)
 
@@ -216,8 +269,8 @@ class Room(Location):
 			logging.debug('%s mail to: %s', caller, key)
 			# caller.startDialog(mail.MailDialog(key))
 
-	def DTMF(self, caller, dtmf):
-		if super(Room, self).DTMF(caller, dtmf):
+	def event_dtmf_begin(self, caller, dtmf):
+		if super(Room, self).event_dtmf_begin(caller, dtmf):
 			return True
 
 		data = caller.user_data
@@ -278,8 +331,8 @@ class ConferenceRoom(Location):
 
 		caller.enqueue(Conference(P_Background, self.conf, 'duplex'))
 
-	def leave(self, caller, gone = False):
-		super(ConferenceRoom, self).leave(caller, gone)
+	def leave(self, caller):
+		super(ConferenceRoom, self).leave(caller)
 
 		caller.discard(P_Background, P_Normal)
 
