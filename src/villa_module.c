@@ -13,7 +13,7 @@
 
 #include "json_tcp.h"
 
-extern void villa_tcp_disconnected();
+extern void villa_tcp_disconnected(void);
 
 extern void villa_event_handler(struct ua *ua, enum ua_event ev,
 	struct call *call, const char *prm, void *arg);

@@ -1,6 +1,8 @@
 import logging
+import os
 from molecule import *
 from protocol import call_later
+import copy
 
 class CallerIterator(object):
 	"""A specialised iterator for caller lists.
@@ -77,6 +79,8 @@ class Location(object):
 
 	def __init__(self):
 		self.callers = []
+		if exists(self.prefix, 'intro_s16.wav'):
+			self.orientation = Play(P_Normal, 'intro_s16.wav', self.prefix)
 
 	def user_data(self):
 		return LocationData()
@@ -87,7 +91,7 @@ class Location(object):
 		caller.user_data = self.user_data()
 		if hasattr(self, 'orientation'):
 			caller.user_data.tm_orientation = \
-				call_later(12.0, self.orientation_timer, caller)
+				call_later(4.0, self.orientation_timer, caller)
 
 		logging.debug('%s enter: %s', caller, self.__class__.__name__)
 
@@ -294,51 +298,6 @@ class Room(Location):
 					c.enqueue(Play(P_Discard, user_data,
 							  prefix='talk'))
 
-class ConferenceRoom(Location):
-	def __init__(self, seq):
-		super(ConferenceRoom, self).__init__()
-		self.seq = seq
-		seq.send(self, 'CNFO')
-		self.conf = None
-		self.bg_dev = None
-
-	def CNFO(self, event, user_data):
-		'''Conference open acknowledgement'''
-		self.conf = event['device']
-		logging.debug('%s conference is: %s', self.__class__.__name__, self.conf)
-
-	def BGRO(self, event, user_data):
-		'''Background open acknowledgement'''
-		self.bg_dev = event['device']
-		logging.debug('%s background: %s', self.__class__.__name__,
-				  self.bg_dev)
-		# add background to conference on channel 0
-		self.seq.send(self, 'MLCA %s 0 %d %d conf %s speak' %
-					  (self.bg_dev, mode_discard, pr_background, self.conf))
-		# play loop in background on channel 1
-		self.seq.send(self, 'MLCA %s %s' %
-					  (self.bg_dev, self.background.as_command(channel=1)))
-
-	def BGRC(self, event, user_data):
-		'''Background close acknowledgement'''
-		self.bg_dev = None
-
-	def enter(self, caller):
-		super(ConferenceRoom, self).enter(caller)
-		# open background channel
-		if hasattr(self, 'background') and not self.bg_dev:
-			self.seq.send(self, 'BGRO')
-
-		caller.enqueue(Conference(P_Background, self.conf, 'duplex'))
-
-	def leave(self, caller):
-		super(ConferenceRoom, self).leave(caller)
-
-		caller.discard(P_Background, P_Normal)
-
-		if hasattr(self, 'background') and self.bg_dev and not self.callers:
-			self.seq.send(self, 'BGRC %s' % self.bg_dev)
-
 class Transition(object):
 	def __init__(self, m_trans, m_in, m_out):
 		self.m_trans = m_trans
@@ -346,26 +305,28 @@ class Transition(object):
 		self.m_out = m_out
 
 class Door(Transition):
-	def __init__(self):
+
+	def __init__(self, open='location/tuer_s16.wav',
+			close='location/tuer_s16.wav'):
+
 		super(Door, self).__init__(
-			Play(P_Transition, 'RBH_Household_front_door_open.wav',
-				 'RBH_Household_front_door_close.wav'),
-			Play(P_Transition, 'RBH_Household_front_door_open.wav'),
-			Play(P_Transition, 'RBH_Household_front_door_close.wav'))
+			Play(P_Transition, open, close),
+			Play(P_Transition, open),
+			Play(P_Transition, close))
 
 class Stairs(Transition):
 	def __init__(self):
 		super(Stairs, self).__init__(
-			Play(P_Transition, 'treppe.wav'),
-			Play(P_Transition, 'RBH_Household_front_door_open.wav'),
-			Play(P_Transition, 'RBH_Household_front_door_close.wav'))
+			Play(P_Transition, 'location/treppe_s16.wav'),
+			Play(P_Transition, 'location/tuer_s16.wav'),
+			Play(P_Transition, 'location/tuer_s16.wav'))
 
 class Teleporter(Transition):
 	def __init__(self, dest):
 		super(Teleporter, self).__init__(
-			Play(P_Transition, 'beamer1.wav'),
-			Play(P_Transition, 'RBH_Household_front_door_open.wav'),
-			Play(P_Transition, 'RBH_Household_front_door_close.wav'))
+			Play(P_Transition, 'location/beamer1_s16.wav'),
+			Play(P_Transition, 'location/tuer_s16.wav'),
+			Play(P_Transition, 'location/tuer_s16.wav'))
 		self.dest = dest
 
 _mirror = { 'north': 'south',

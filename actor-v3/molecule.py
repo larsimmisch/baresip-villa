@@ -12,6 +12,10 @@ def get_root():
 	global _root
 	return _root
 
+def exists(prefix, name):
+	global _root
+	p = os.path.join(_root, prefix or '', name)
+	return os.path.exists(p)
 class Atom(object):
 	def __init__(self):
 		"""notify should be 'none', 'begin', 'end' or 'both'"""

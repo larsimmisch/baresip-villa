@@ -44,38 +44,50 @@ static bool json_tcp_recv_handler(int *errp, struct mbuf *mbx, bool *estab,
 		return true;
 	}
 
-	/* extract all json frames (delimited by NUL or \r\n\r\n) in the TCP-stream */
-	for (size_t i = 0; i < mbuf_end(rcvbuf); ++i) {
+	size_t recv_size = mbuf_end(rcvbuf);
+	const char* recv = (const char*)rcvbuf->buf;
 
-		bool rn_delimited = (mbuf_end(rcvbuf) - i) >=2 &&
-			strncmp((const char*)(rcvbuf->buf + i), "\r\n", 2) == 0;
+	/* extract all json frames delimited by \r\n\ in the TCP-stream */
+	for (char* rn = strnstr(recv, "\r\n", recv_size); rn; rn = strnstr(recv, "\r\n", recv_size)) {
 
-		if (rn_delimited) {
+		size_t l = rn - recv;
 
-			++jt->n_rx;
+		/* zero-terminate the string */
+		*rn = '\0';
 
-			struct odict *od = NULL;
-			const char* str = (const char*)(rcvbuf->buf);
-			err = json_decode_odict(&od, DICT_BSIZE, str, strlen(str),
-				MAX_LEVELS);
+		++jt->n_rx;
 
-			bool is_empty = odict_count(od, true) == 0;
-			if (err || is_empty) {
-				if (is_empty)
-					DEBUG_PRINTF("villa: received JSON is empty. Closing connection\n", err);
-				else
-					DEBUG_PRINTF("villa: failed to decode JSON (%m). Closing connection\n", err);
+		struct odict *od = NULL;
+		err = json_decode_odict(&od, DICT_BSIZE, (const char*)recv, l,
+			MAX_LEVELS);
 
-				*errp = EINVAL;
-				mem_deref(od);
-				return true;
-			}
+		bool is_empty = odict_count(od, true) == 0;
+		if (err || is_empty) {
+			if (is_empty)
+				DEBUG_PRINTF("villa: received JSON is empty. Closing connection\n", err);
+			else
+				DEBUG_PRINTF("villa: failed to decode JSON (%m). Closing connection\n", err);
 
-			DEBUG_INFO("received message: %s", str);
-
-			jt->frameh(od, errp, jt->arg);
-			mbuf_rewind(jt->rcvbuf);
+			*errp = EINVAL;
 			mem_deref(od);
+			return true;
+		}
+
+		DEBUG_INFO("received message: %s", recv);
+
+		jt->frameh(od, errp, jt->arg);
+		mem_deref(od);
+
+		l += + 2;
+		recv_size -= l;
+		recv += l;
+	}
+
+	if (recv_size != mbuf_end(rcvbuf)) {
+		mbuf_rewind(jt->rcvbuf);
+		if (recv_size) {
+			/* write the remaining data to the buffer */
+			mbuf_write_mem(jt->rcvbuf, (uint8_t*)recv, recv_size);
 		}
 	}
 
