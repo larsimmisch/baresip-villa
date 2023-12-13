@@ -1,6 +1,6 @@
 [submodule "baresip"]
 	path = baresip
-	url = git@github.com:baresip/baresip.git
+	url = git@github.com:larsimmisch/baresip.git
 [submodule "re"]
 	path = re
 	url = git@github.com:baresip/re.git
