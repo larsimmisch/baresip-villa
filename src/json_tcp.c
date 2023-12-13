@@ -73,7 +73,7 @@ static bool json_tcp_recv_handler(int *errp, struct mbuf *mbx, bool *estab,
 			return true;
 		}
 
-		DEBUG_INFO("received message: %s", recv);
+		DEBUG_INFO("received message: %s\n", recv);
 
 		jt->frameh(od, errp, jt->arg);
 		mem_deref(od);

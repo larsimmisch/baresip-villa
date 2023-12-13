@@ -223,6 +223,7 @@ int Play::start() {
 	// int err = audio_set_source(_audio, "aufile", _filename.c_str());
 	int err = audio_set_source_offset(_audio, "aufile", _filename.c_str(), _offset);
 	if (err) {
+		warning("villa: can't start playing %s: %s\n", _filename.c_str(), strerror(errno));
 		_audio = nullptr;
 	}
 
@@ -252,7 +253,11 @@ size_t Play::length() const
 		return 0;
 	}
 
-	return aufile_get_length(f, &p);
+	_length = aufile_get_length(f, &p);
+
+	mem_deref(f);
+
+	return _length;
 }
 
 #pragma mark Record
@@ -277,6 +282,7 @@ int Record::start() {
 
 	int err = audio_set_player(_audio, "aufile", _filename.c_str());
 	if (err) {
+		warning("villa: can't start recording %s: %s\n", _filename.c_str(), strerror(errno));
 		_audio = nullptr;
 		return err;
 	}
@@ -675,7 +681,7 @@ extern "C" {
 			break;
 		}
 		default:
-			warning("unhandled event %s\n", uag_event_str(ev));
+			warning("villa: unhandled event %s\n", uag_event_str(ev));
 			break;
 		}
 

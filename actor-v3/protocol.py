@@ -195,11 +195,16 @@ if __name__ == '__main__':
 								{ 'type': 'play', 'filename': '/usr/local/share/baresip/villa/Villa/beep_s16.wav'},
 								{ 'type': 'record', 'filename': 'record.wav', 'max_silence': 2500, 'dtmf_stop': True })
 			elif dtmf == '2':
-				self.send_command('enqueue', pr_normal, mode_discard, "17",
+				self.send_command('enqueue', pr_normal, mode_discard,
 								{ 'type': 'play', 'filename': 'record.wav' })
 			elif dtmf == '#':
 				self.send_command('enqueue', pr_normal, mode_discard,
 								{ 'type': 'play', 'filename': '/usr/local/share/baresip/villa/Villa/help_s16.wav', 'max_silence': 2000 })
+
+		def event_molecule_done(self, data):
+			if data['token'] == '17':
+				self.send_command('enqueue', pr_normal, mode_discard,
+								{ 'type': 'play', 'filename': 'record.wav' })
 
 
 

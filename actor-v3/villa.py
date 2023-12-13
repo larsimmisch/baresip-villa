@@ -41,27 +41,27 @@ def connect(source, dest, transition, direction, reverse = None):
 
 class Diele(Room):
 	prefix = 'diele'
-	shortcut = '001'
+	shortcut = '101'
 	floor = 0
 	background = Play(P_Background, 'dieleatm_s16.wav',
 					  prefix=prefix)
 class Flur(Room):
 	prefix = 'flur'
-	shortcut = '002'
+	shortcut = '102'
 	floor = 0
 	background = Play(P_Background, 'fluidum_s16.wav',
 					  prefix=prefix)
 
 class Salon(Room):
 	prefix = 'salon'
-	shortcut = '003'
+	shortcut = '103'
 	floor = 0
 	background = Play(P_Background, 'smooth1_s16.wav',
 					  prefix=prefix)
 
 class Sofa(Room):
 	prefix = 'sofa'
-	shortcut = '004'
+	shortcut = '104'
 	floor = 0
 	background = Play(P_Background, 'welten1x_s16.wav',
 					  prefix=prefix)
@@ -69,73 +69,73 @@ class Sofa(Room):
 
 class Speiseraum(Room):
 	prefix = 'flur'
-	shortcut = '003'
+	shortcut = '105'
 	floor = 0
 	background = Play(P_Background, 'welten6x_s16.wav',
 					  prefix=prefix)
 
 class Küche(Room):
 	prefix = 'kueche'
-	shortcut = '004'
+	shortcut = '106'
 	floor = 0
 	background = Play(P_Background, 'suchbiet_s16.wav',
 					  prefix=prefix)
 
 class Kühlschrank(Room):
 	prefix = 'kuehlschrank'
-	shortcut = '005'
+	shortcut = '107'
 	floor = 0
 	background = Play(P_Background, 'dgfltatm_s16.wav',
 					  prefix=prefix)
 
 class Bibliothek(Room):
 	prefix = 'bibliothek'
-	shortcut = '006'
+	shortcut = '108'
 	floor = 0
 	background = Play(P_Background, 'birdy2_s16.wav',
 					  prefix=prefix)
 
 class Terasse(Room):
 	prefix = 'terasse'
-	shortcut = '007'
+	shortcut = '109'
 	floor = 0
 
 class Garten(Room):
 	prefix = 'garten'
-	shortcut = '008'
+	shortcut = '110'
 	floor = 0
 	background = Play(P_Background, 'wiese_s16.wav',
 					  prefix=prefix)
 
 class Damenklo(Room):
 	prefix = 'damenklo'
-	shortcut = '009'
+	shortcut = '111'
 	floor = 0
 	background = Play(P_Background, 'flussmus_s16.wav',
 					  prefix=prefix)
 
 class Herrenklo(Room):
-	prefix = 'damenklo'
-	shortcut = '010'
+	prefix = 'herrenklo'
+	shortcut = '112'
 	floor = 0
 	background = Play(P_Background, 'rico_s16.wav',
 					  prefix=prefix)
 
 class Regal(Room):
 	prefix = 'regal'
-	shortcut = '011'
+	shortcut = '113'
 	floor = 0
 
 class Kommode(Room):
 	prefix = 'kommode'
-	shortcut = '012'
+	shortcut = '114'
 	floor = 0
 
 
 class Schreibtisch(Room):
 	prefix = 'schreibtisch'
-	shortcut = '011'
-	help = Play(P_Discard, 'help.wav', prefix=prefix)
+	shortcut = '115'
+	help = Play(P_Discard, 'help_s16.wav', prefix=prefix)
 
 	def enter(self, caller):
 		super(Schreibtisch, self).enter(caller)
@@ -386,10 +386,6 @@ class Villa(object):
 		log.debug('%s entered', caller)
 
 		self.callers[caller.call_id] = caller
-
-		caller.enqueue(
-			Play(P_Transition,
-				 '4011_suonho_sweetchoff_iLLCommunications_suonho_s16.wav'))
 
 		# caller.startDialog(EntryDialog(caller, self))
 

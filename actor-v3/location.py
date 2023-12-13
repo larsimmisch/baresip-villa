@@ -57,23 +57,57 @@ class LocationData(object):
 	'''Per caller data for each location.'''
 	def __init__(self):
 		self.tid_talk = None
-		self.tm_move = None
-		self.tm_starhash = None
-		self.tm_orientation = None
 		self.bf_starhash = ''
 		self.it_callers = None
+		self.timers = {}
 
 	def __del__(self):
-		self.cancel('tm_move')
-		self.cancel('tm_starhash')
-		self.cancel('tm_orientation')
+		for tm in self.timers.values():
+			tm.cancel()
 
-	def cancel(self, tm):
+	def wrap_callback(self, id: str, callback: callable, *args):
+		callback(*args)
+		del self.timers[id]
+
+	def call_later(self, id: str, delay: float, callback: callable, *args):
+		self.timers[id] = call_later(delay, self.wrap_callback, self, id, callback, *args)
+
+	def cancel(self, timer_id: str):
 		'''Cancel the timer called tm. Sets the attribute tm to None'''
-		t = getattr(self, tm)
-		setattr(self, tm, None)
+		t = self.timers.get(timer_id, None)
 		if t:
 			t.cancel()
+			del self.timers[timer_id]
+
+class Transition(object):
+	def __init__(self, m_trans, m_in, m_out):
+		self.m_trans = m_trans
+		self.m_in = m_in
+		self.m_out = m_out
+
+class Door(Transition):
+
+	def __init__(self, f_trans='location/tuer_s16.wav',
+			f_in='location/tuer_s16.wav', f_out='location/tuer_s16.wav'):
+
+		super(Door, self).__init__(
+			Play(P_Transition, f_trans),
+			Play(P_Transition, f_in),
+			Play(P_Transition, f_out))
+
+class Stairs(Transition):
+	def __init__(self):
+		super(Stairs, self).__init__(
+			Play(P_Transition, 'location/treppe_s16.wav'),
+			Play(P_Transition, 'location/tuer_s16.wav'),
+			Play(P_Transition, 'location/tuer_s16.wav'))
+
+class Teleporter(Transition):
+	def __init__(self):
+		super(Teleporter, self).__init__(
+			Play(P_Transition, 'location/beamer1_s16.wav'),
+			Play(P_Transition, 'location/tuer_s16.wav'),
+			Play(P_Transition, 'location/tuer_s16.wav'))
 
 class Location(object):
 
@@ -90,8 +124,7 @@ class Location(object):
 		caller.location = self
 		caller.user_data = self.user_data()
 		if hasattr(self, 'orientation'):
-			caller.user_data.tm_orientation = \
-				call_later(4.0, self.orientation_timer, caller)
+			caller.user_data.call_later('orientation', 4.0, self.orientation_timer, caller)
 
 		logging.debug('%s enter: %s', caller, self.__class__.__name__)
 
@@ -136,21 +169,18 @@ class Location(object):
 		caller.enqueue(Beep(P_Normal, 1))
 
 	def orientation_timer(self, caller):
-		caller.user_data.tm_orientation = None
 		caller.enqueue(self.orientation)
 
 	def move_invalid(self, caller):
 		caller.enqueue(Play(P_Normal, 'there_is_nothing.wav', prefix='lars'))
 
 	def move_timer(self, caller):
-		caller.user_data.tm_move = None
 		self.generic_invalid(caller)
 
 	def starhash_invalid(self, caller):
 		self.generic_invalid(caller)
 
 	def starhash_timer(self, caller):
-		caller.user_data.tm_starhash = None
 		self.generic_invalid(caller)
 
 	def starhash(self, caller, key):
@@ -183,8 +213,8 @@ class Location(object):
 
 	def event_dtmf_begin(self, caller, dtmf):
 		data = caller.user_data
-		data.cancel('tm_orientation')
-		if data.tm_move:
+		data.cancel('orientation')
+		if data.timers.get('move', None):
 			dir = None
 			if dtmf == '1':
 				dir = 'northwest'
@@ -203,10 +233,10 @@ class Location(object):
 			elif dtmf == '9':
 				dir = 'southeast'
 			else:
-				data.cancel('tm_move')
+				data.cancel('move')
 				self.move_invalid(caller)
 			if dir:
-				data.cancel('tm_move')
+				data.cancel('move')
 				trans = getattr(self, dir, None)
 				if trans:
 					self.move(caller, trans)
@@ -214,30 +244,28 @@ class Location(object):
 					self.move_invalid(caller)
 
 			return True
-		elif data.tm_starhash:
+		elif data.timers.get('starhash', None):
 			if dtmf == '#':
-				data.cancel('tm_starhash')
+				data.cancel('starhash')
 				self.starhash(caller, data.bf_starhash)
 			elif dtmf == '*':
-				data.cancel('tm_starhash')
+				data.cancel('starhash')
 				self.starhash_invalid(caller)
 			else:
-				data.cancel('tm_starhash')
 				# inter digit timer for direct access
-				data.tm_starhash = call_later(3.0, self.starhash_timer)
+				data.call_later('starhash', 3.0, self.starhash_timer, self, caller)
 				data.bf_starhash = data.bf_starhash + dtmf
 
 			return True
 
 		if dtmf == '5':
-			data.tm_move = call_later(2.0, self.move_timer, caller)
+			data.call_later('move', 2.0, self.move_timer, self, caller)
 			return True
 		elif dtmf == '6':
 			self.announce_others(caller)
 			return True
 		elif dtmf == '*':
-			data.tm_starhash = call_later(2.0, self.starhash_timer,
-										 caller)
+			data.call_later('starhash', 2.0, self.starhash_timer, self, caller)
 			return True
 		elif dtmf == '#':
 			if hasattr(self, 'help'):
@@ -283,7 +311,7 @@ class Room(Location):
 		elif dtmf == '4':
 			talk = self.gen_talk_id()
 			data.tid_talk = caller.enqueue(
-				RecordBeep(P_Normal, talk, 10.0, prefix='talk'),
+				RecordBeep(P_Normal, talk, 10.0, prefix=os.path.join(self.prefix or '', 'talk'),
 				tid_data = talk)
 
 	def MLCA(self, caller, event, user_data):
@@ -298,36 +326,6 @@ class Room(Location):
 					c.enqueue(Play(P_Discard, user_data,
 							  prefix='talk'))
 
-class Transition(object):
-	def __init__(self, m_trans, m_in, m_out):
-		self.m_trans = m_trans
-		self.m_in = m_in
-		self.m_out = m_out
-
-class Door(Transition):
-
-	def __init__(self, open='location/tuer_s16.wav',
-			close='location/tuer_s16.wav'):
-
-		super(Door, self).__init__(
-			Play(P_Transition, open, close),
-			Play(P_Transition, open),
-			Play(P_Transition, close))
-
-class Stairs(Transition):
-	def __init__(self):
-		super(Stairs, self).__init__(
-			Play(P_Transition, 'location/treppe_s16.wav'),
-			Play(P_Transition, 'location/tuer_s16.wav'),
-			Play(P_Transition, 'location/tuer_s16.wav'))
-
-class Teleporter(Transition):
-	def __init__(self, dest):
-		super(Teleporter, self).__init__(
-			Play(P_Transition, 'location/beamer1_s16.wav'),
-			Play(P_Transition, 'location/tuer_s16.wav'),
-			Play(P_Transition, 'location/tuer_s16.wav'))
-		self.dest = dest
 
 _mirror = { 'north': 'south',
 			'northeast': 'southwest',
