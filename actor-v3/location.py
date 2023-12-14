@@ -294,7 +294,7 @@ class Room(Location):
 	def leave(self, caller):
 		super(Room, self).leave(caller)
 		if hasattr(self, 'background'):
-			caller.discard(P_Background, P_Normal)
+			caller.discard_range(P_Background, P_Normal)
 
 	def starhash(self, caller, key):
 		if not super(Room, self).starhash(caller, key):
@@ -306,25 +306,26 @@ class Room(Location):
 			return True
 
 		data = caller.user_data
-		if data.tid_talk:
-			caller.stop(data.tid_talk)
-		elif dtmf == '4':
-			talk = self.gen_talk_id()
-			data.tid_talk = caller.enqueue(
-				RecordBeep(P_Normal, talk, 10.0, prefix=os.path.join(self.prefix or '', 'talk'),
-				tid_data = talk)
+		if dtmf == '4':
+			if data.tid_talk:
+				caller.stop(data.tid_talk)
+			else:
+				data.tid_talk = self.gen_talk_id()
+				caller.enqueue(
+					RecordBeep(P_Normal, data.tid_talk, 10.0, prefix=os.path.join(self.prefix or '', 'talk')),
+					token=data.tid_talk)
 
-	def MLCA(self, caller, event, user_data):
+	def event_molecule_done(self, caller, event):
 		data = caller.user_data
-		tid = event['tid']
+		token = event['token']
 		status = event['status']
-		if data.tid_talk == tid:
+		if data.tid_talk == token:
 			data.tid_talk = None
-			logging.info('talk %s (%d): status %s',  user_data, tid, status)
+			logging.info('talk %s: status %s',  token, status)
 			for c in self.callers:
 				if c != caller:
-					c.enqueue(Play(P_Discard, user_data,
-							  prefix='talk'))
+					c.enqueue(Play(P_Discard, token,
+							  prefix=os.path.join(self.prefix or '', 'talk')))
 
 
 _mirror = { 'north': 'south',

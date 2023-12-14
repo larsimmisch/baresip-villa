@@ -9,11 +9,12 @@
 			"type": "cppdbg",
 			"request": "launch",
 			"program": "${workspaceFolder}/baresip/build/baresip",
-			"args": [ "-m", "build/libbaresip_villa.so", "-v"],
+			// "args": [ "-m", "build/libbaresip_villa.so", "-v"],
 			"stopAtEntry": false,
 			"cwd": "${workspaceFolder}",
 			"environment": [],
-			"MIMode": "lldb"
+			"MIMode": "lldb",
+			"externalConsole": true
 		}
 
 	]

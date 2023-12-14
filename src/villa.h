@@ -188,17 +188,23 @@ struct VQueue {
 		sched_end_of_file
 	};
 
+	enum discard_result {
+		discard_nothing,
+		discard_inactive,
+		discard_active
+	};
+
 	VQueue(Session *session = nullptr) : _session(session) {
 		_molecules.resize(max_priority + 1);
 	}
 
-	void discard(Molecule* m);
+	discard_result discard(Molecule* m);
 	std::vector<Molecule>::iterator next();
 	std::vector<Molecule>::iterator end() { return _molecules[0].end(); }
 
 	int schedule(reason);
 
-	int enqueue(const Molecule& m);
+	int enqueue(const Molecule &m);
 
 	std::vector<std::vector<Molecule> > _molecules;
 	Molecule *_active = nullptr;

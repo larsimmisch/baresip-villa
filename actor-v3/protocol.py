@@ -20,18 +20,22 @@ class Caller(object):
 		self.dialog = None
 		self.location = None
 
-	def send_command(self, command, *args):
-		self.token_count += 1
-		token = f'{self.call_id}-{self.token_count}'
+	def send_command(self, command, token, *args):
+		if token is None:
+			self.token_count += 1
+			token = f'{self.call_id}-{self.token_count}'
 		self.transport.send_command(command, self.call_id, *args, token=token)
 		return token
 
-	def enqueue(self, molecule):
+	def enqueue(self, molecule, token=None):
 		args = molecule.as_args()
-		return self.send_command('enqueue', *args)
+		return self.send_command('enqueue', token, *args)
 
-	def discard(self, prio_from, prio_to):
-		return self.send_command('discard', prio_from, prio_to)
+	def discard(self, token_to_stop):
+		return self.send_command('discard', token_to_stop)
+
+	def discard_range(self, prio_from, prio_to):
+		return self.send_command('discard_range', prio_from, prio_to)
 
 	def call_accepted(self):
 		self.world.enter(self)
@@ -184,8 +188,13 @@ if __name__ == '__main__':
 
 	class TestCaller(Caller):
 		def call_accepted(self):
-			self.send_command('enqueue', pr_background, mode_loop | mode_mute,
-		 				{ 'type': 'play', 'filename': '/usr/local/share/baresip/villa/Villa/pipiszimmer/party_s16.wav'})
+			# self.send_command('enqueue', pr_background, mode_loop | mode_mute,
+		 	#			{ 'type': 'play', 'filename': '/usr/local/share/baresip/villa/Villa/pipiszimmer/party_s16.wav'})
+
+			self.send_command('enqueue', pr_normal, mode_discard, "17",
+							{ 'type': 'play', 'filename': '/usr/local/share/baresip/villa/Villa/beep_s16.wav'},
+							{ 'type': 'record', 'filename': 'record.wav', 'max_silence': 2500, 'dtmf_stop': True })
+
 
 		def event_dtmf_begin(self, data):
 			dtmf = data['key']
