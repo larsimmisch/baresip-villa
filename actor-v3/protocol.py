@@ -4,6 +4,7 @@ import os
 import json
 import asyncio
 import logging
+import socket
 from molecule import pr_background, pr_normal, mode_loop, mode_mute, mode_discard
 
 def call_later(delay, callback, *args, context=None):
@@ -178,7 +179,8 @@ if __name__ == '__main__':
 	class TestWorld(object):
 
 		def connection_made(self, transport):
-			transport.send_command('listen', '<sip:villa@immisch-macbook-pro.local>')
+			hostname = socket.gethostname()
+			transport.send_command('listen', f'<sip:villa@{hostname}>')
 
 		def accept_incoming(self, details):
 			return True

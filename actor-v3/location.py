@@ -90,21 +90,21 @@ class Door(Transition):
 	def __init__(self, f_trans='location/tuer_s16.wav',
 			f_in='location/tuer_s16.wav', f_out='location/tuer_s16.wav'):
 
-		super(Door, self).__init__(
+		super().__init__(
 			Play(P_Transition, f_trans),
 			Play(P_Transition, f_in),
 			Play(P_Transition, f_out))
 
 class Stairs(Transition):
 	def __init__(self):
-		super(Stairs, self).__init__(
+		super().__init__(
 			Play(P_Transition, 'location/treppe_s16.wav'),
 			Play(P_Transition, 'location/tuer_s16.wav'),
 			Play(P_Transition, 'location/tuer_s16.wav'))
 
 class Teleporter(Transition):
 	def __init__(self):
-		super(Teleporter, self).__init__(
+		super().__init__(
 			Play(P_Transition, 'location/beamer1_s16.wav'),
 			Play(P_Transition, 'location/tuer_s16.wav'),
 			Play(P_Transition, 'location/tuer_s16.wav'))
@@ -278,7 +278,7 @@ class Location(object):
 
 class Room(Location):
 	def __init__(self):
-		super(Room, self).__init__()
+		super().__init__()
 		self.talk_id = 0
 		self.orientation = Play(P_Discard, 'helpmove_s16.wav', prefix=self.prefix)
 
@@ -287,22 +287,22 @@ class Room(Location):
 		return '%s_%d.wav' % (self.__class__.__name__, self.talk_id)
 
 	def enter(self, caller):
-		super(Room, self).enter(caller)
+		super().enter(caller)
 		if hasattr(self, 'background'):
 			caller.enqueue(self.background)
 
 	def leave(self, caller):
-		super(Room, self).leave(caller)
+		super().leave(caller)
 		if hasattr(self, 'background'):
 			caller.discard_range(P_Background, P_Normal)
 
 	def starhash(self, caller, key):
-		if not super(Room, self).starhash(caller, key):
+		if not super().starhash(caller, key):
 			logging.debug('%s mail to: %s', caller, key)
 			# caller.startDialog(mail.MailDialog(key))
 
 	def event_dtmf_begin(self, caller, dtmf):
-		if super(Room, self).event_dtmf_begin(caller, dtmf):
+		if super().event_dtmf_begin(caller, dtmf):
 			return True
 
 		data = caller.user_data
