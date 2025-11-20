@@ -14,14 +14,14 @@
 	cmake --build build
 	cd ..
 
-	cd baresip-apps
+	cd baresip
+	git checkout immisch/aufile-src-offset
 	cmake -B build
 	cmake --build build
 	sudo cmake --install build
 	cd ..
 
-	cd baresip
-	git checkout immisch/aufile-src-offset
+	cd baresip-apps
 	cmake -B build
 	cmake --build build
 	sudo cmake --install build
